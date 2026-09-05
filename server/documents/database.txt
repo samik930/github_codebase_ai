@@ -1,0 +1,6 @@
+The application uses MongoDB as its primary database.
+
+Mongoose is used to define schemas and interact with MongoDB.
+
+The User model stores information such as name, email and
+hashed password.

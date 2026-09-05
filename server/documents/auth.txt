@@ -1,0 +1,7 @@
+The application uses JWT authentication.
+
+When a user logs in, the authentication controller validates
+the user's credentials and generates a JWT token.
+
+Protected routes use authentication middleware to verify the
+JWT token before allowing the request to continue.
