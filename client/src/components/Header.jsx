@@ -1,32 +1,48 @@
 import React from 'react';
-import { Cpu, Server, CheckCircle2, GitBranch } from 'lucide-react';
+import { Cpu, Server, GitBranch, Database } from 'lucide-react';
+import { ThemePicker } from './ThemePicker';
 
-export function Header({ isConnected, activeRepo }) {
+export function Header({ isConnected, activeRepo, currentTheme, onSelectTheme }) {
   return (
     <header className="app-header">
+      {/* Brand Section */}
       <div className="brand-section">
-        <div className="brand-icon">
-          <Cpu size={24} />
+        <div className="brand-icon-wrapper">
+          <Cpu size={24} style={{ color: '#ffffff' }} />
         </div>
         <div>
-          <h1 className="brand-title">Codebase Copilot</h1>
-          <p className="brand-subtitle">AI-Powered RAG Code Intelligence</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <h1 className="brand-title">CODEBASE COPILOT</h1>
+          </div>
+          <p className="brand-subtitle">AI RAG Codebase Intelligence</p>
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      {/* Telemetry Bar */}
+      <div className="hud-telemetry-bar">
+        {/* Backend Connectivity Chip */}
+        <div className={`hud-pill ${isConnected ? 'hud-pill-active' : ''}`}>
+          <div className={`status-dot ${isConnected ? 'online' : 'idle'}`} />
+          <Server size={13} />
+          <span>{isConnected ? 'NODE READY' : 'OFFLINE'}</span>
+        </div>
+
+        {/* Vector DB Engine Telemetry */}
+        <div className="hud-pill">
+          <Database size={13} style={{ color: 'var(--accent-primary)' }} />
+          <span>VECTOR DB: ACTIVE</span>
+        </div>
+
+        {/* Active Repo Chip */}
         {activeRepo && (
-          <div className="repo-status-chip" style={{ padding: '6px 12px' }}>
-            <GitBranch size={14} />
-            <span>{activeRepo.repository} ({activeRepo.files} files)</span>
+          <div className="hud-pill hud-pill-active">
+            <GitBranch size={13} style={{ color: 'var(--accent-secondary)' }} />
+            <span className="repo-pill-text">{activeRepo.repository} ({activeRepo.files} FILES)</span>
           </div>
         )}
 
-        <div className="status-badge">
-          <div className={`status-dot ${isConnected ? 'online' : 'idle'}`} />
-          <Server size={14} style={{ color: 'var(--text-muted)' }} />
-          <span>{isConnected ? 'Backend Ready' : 'Connecting...'}</span>
-        </div>
+        {/* Theme Picker Switcher */}
+        <ThemePicker currentTheme={currentTheme} onSelectTheme={onSelectTheme} />
       </div>
     </header>
   );

@@ -496,32 +496,30 @@ async function ensureCollection(qdrant) {
                 COLLECTION_NAME
         );
 
-    if (!exists) {
-
+    if (exists) {
         console.log(
-            `Creating Qdrant collection: ${COLLECTION_NAME}`
+            `Deleting old Qdrant collection: ${COLLECTION_NAME} to remove previous repo data...`
         );
-
-        await qdrant.createCollection(
-            COLLECTION_NAME,
-            {
-                vectors: {
-                    size: VECTOR_SIZE,
-                    distance: "Cosine"
-                }
-            }
-        );
-
-        console.log(
-            "Qdrant collection created."
-        );
-
-    } else {
-
-        console.log(
-            `Qdrant collection "${COLLECTION_NAME}" already exists.`
-        );
+        await qdrant.deleteCollection(COLLECTION_NAME);
     }
+
+    console.log(
+        `Creating fresh Qdrant collection: ${COLLECTION_NAME}`
+    );
+
+    await qdrant.createCollection(
+        COLLECTION_NAME,
+        {
+            vectors: {
+                size: VECTOR_SIZE,
+                distance: "Cosine"
+            }
+        }
+    );
+
+    console.log(
+        "Qdrant collection created and reset."
+    );
 }
 
 

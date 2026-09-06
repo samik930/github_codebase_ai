@@ -198,30 +198,28 @@ export async function ingestDocuments(files) {
                 collection.name === COLLECTION_NAME
         );
 
-    if (!collectionExists) {
-
+    if (collectionExists) {
         console.log(
-            `Creating Qdrant collection: ${COLLECTION_NAME}`
+            `Deleting old Qdrant collection "${COLLECTION_NAME}" to purge previous repository data...`
         );
-
-        await qdrant.createCollection(
-            COLLECTION_NAME,
-            {
-                vectors: {
-                    size: VECTOR_SIZE,
-                    distance: "Cosine"
-                }
-            }
-        );
-
-        console.log("Qdrant collection created");
-
-    } else {
-
-        console.log(
-            `Qdrant collection "${COLLECTION_NAME}" already exists`
-        );
+        await qdrant.deleteCollection(COLLECTION_NAME);
     }
+
+    console.log(
+        `Creating fresh Qdrant collection: ${COLLECTION_NAME}`
+    );
+
+    await qdrant.createCollection(
+        COLLECTION_NAME,
+        {
+            vectors: {
+                size: VECTOR_SIZE,
+                distance: "Cosine"
+            }
+        }
+    );
+
+    console.log("Qdrant collection created and reset for new repository");
 
 
     // --------------------------------
