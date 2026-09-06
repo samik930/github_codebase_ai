@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   FolderGit2, Loader2, CheckCircle, AlertCircle, ArrowRight, 
-  Clock, AlertTriangle, Layers, FileCode, Database
+  Clock, AlertTriangle, Layers, FileCode, Database, Cpu
 } from 'lucide-react';
 
 function GithubIcon({ size = 18, style }) {
@@ -17,6 +17,9 @@ export function IngestCard({ onIngestSuccess, activeRepo }) {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [progress, setProgress] = useState(0);
+  const [batchInfo, setBatchInfo] = useState(null);
+  const [statusMessage, setStatusMessage] = useState('');
 
   const handleIngest = async (e) => {
     if (e) e.preventDefault();
@@ -24,6 +27,9 @@ export function IngestCard({ onIngestSuccess, activeRepo }) {
 
     setLoading(true);
     setError(null);
+    setProgress(0);
+    setBatchInfo(null);
+    setStatusMessage('Connecting to repository ingestion pipeline...');
 
     try {
       const response = await fetch('/api/ingest', {
@@ -34,14 +40,70 @@ export function IngestCard({ onIngestSuccess, activeRepo }) {
         body: JSON.stringify({ githubUrl: url.trim() }),
       });
 
-      const data = await response.json();
-
       if (!response.ok) {
-        throw new Error(data.error || 'Ingestion failed');
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Ingestion request failed');
       }
 
-      onIngestSuccess(data);
-      setUrl('');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n\n');
+        buffer = lines.pop(); // keep trailing incomplete chunk
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data: ')) {
+            const jsonStr = trimmed.replace(/^data:\s*/, '');
+            try {
+              const event = JSON.parse(jsonStr);
+
+              if (event.type === 'error') {
+                throw new Error(event.error || 'Ingestion process error');
+              }
+
+              if (event.type === 'status') {
+                setStatusMessage(event.message);
+              }
+
+              if (event.percent !== undefined) {
+                setProgress(event.percent);
+              }
+
+              if (event.currentBatch !== undefined && event.totalBatches !== undefined) {
+                setBatchInfo({
+                  currentBatch: event.currentBatch,
+                  totalBatches: event.totalBatches,
+                  processedChunks: event.processedChunks,
+                  totalChunks: event.totalChunks
+                });
+                setStatusMessage(`Processing batch ${event.currentBatch} of ${event.totalBatches} (${event.processedChunks} / ${event.totalChunks} chunks)`);
+              }
+
+              if (event.type === 'complete') {
+                setProgress(100);
+                setStatusMessage('Ingestion completed successfully!');
+                onIngestSuccess(event);
+                setUrl('');
+                setLoading(false);
+                return;
+              }
+            } catch (err) {
+              if (err.message && err.message !== 'Ingestion process error') {
+                console.error("SSE parse error:", err);
+              } else {
+                throw err;
+              }
+            }
+          }
+        }
+      }
     } catch (err) {
       setError(err.message || 'Failed to ingest repository');
     } finally {
@@ -94,17 +156,35 @@ export function IngestCard({ onIngestSuccess, activeRepo }) {
         </button>
       </form>
 
-      {/* Loading Banner */}
+      {/* Real-time Batch Progress Loading Bar */}
       {loading && (
-        <div className="hud-pill" style={{ padding: '14px 18px', background: 'rgba(37, 99, 235, 0.06)', borderColor: 'var(--accent-primary)', borderRadius: '10px' }}>
-          <Clock size={22} className="spinner" style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-          <div>
-            <div style={{ fontWeight: '700', fontSize: '0.92rem', color: 'var(--accent-primary)', fontFamily: 'Space Grotesk, sans-serif' }}>
-              Ingestion in Progress... Please wait! Ingestion may take several minutes.
+        <div className="ingest-progress-box">
+          <div className="ingest-progress-header">
+            <div className="ingest-progress-title">
+              <Loader2 size={18} className="spinner" />
+              <span>Ingestion in Progress... Please wait! (May take several minutes)</span>
             </div>
-            <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontFamily: 'JetBrains Mono, monospace', marginTop: '2px' }}>
-              Parsing codebase tokens, embedding chunks, and updating vector index graph...
+            <span className="ingest-progress-pct">{progress}%</span>
+          </div>
+
+          <div className="ingest-progress-bar-track">
+            <div 
+              className="ingest-progress-bar-fill" 
+              style={{ width: `${progress}%` }} 
+            />
+          </div>
+
+          <div className="ingest-stage-desc" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Cpu size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+              <span>{statusMessage || 'Processing codebase vectors...'}</span>
             </div>
+
+            {batchInfo && (
+              <span style={{ fontWeight: '700', color: 'var(--accent-primary)', background: 'rgba(37, 99, 235, 0.06)', padding: '2px 8px', borderRadius: '4px' }}>
+                BATCH {batchInfo.currentBatch}/{batchInfo.totalBatches} ({batchInfo.processedChunks}/{batchInfo.totalChunks} CHUNKS)
+              </span>
+            )}
           </div>
         </div>
       )}
@@ -122,7 +202,7 @@ export function IngestCard({ onIngestSuccess, activeRepo }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div className="hud-pill hud-pill-active" style={{ padding: '10px 16px', borderRadius: '10px' }}>
             <CheckCircle size={18} style={{ color: 'var(--accent-green)' }} />
-            <span style={{ fontFamily: 'Space Grotesk, sans-serif', fontWeight: '600' }}>
+            <span style={{ fontFamily: 'Space Grotesk, sans-serif', fontWeight: '600', wordBreak: 'break-word' }}>
               REPOSITORY INDEXED SUCCESSFULLY: <strong>{activeRepo.repository}</strong>
             </span>
           </div>

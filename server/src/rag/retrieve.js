@@ -1,166 +1,243 @@
 import "dotenv/config";
 
+import { GoogleGenAI } from "@google/genai";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { QdrantVectorStore } from "@langchain/qdrant";
 
 const COLLECTION_NAME = "codebase_documents";
 
+const ai = new GoogleGenAI({
+    apiKey: process.env.GOOGLE_API_KEY
+});
+
+
 /*
- * ---------------------------------------------------------
- * 1. Extract metadata constraints from the user's query
- * ---------------------------------------------------------
+ * =========================================================
+ * 1. EXTRACT METADATA FROM USER QUERY
+ * =========================================================
  *
- * This function is intentionally separate from Qdrant.
+ * We let Gemini understand whether the user's query contains
+ * any information related to the metadata stored in Qdrant.
  *
- * Its job:
+ * Current metadata:
  *
- * User query
- *      ↓
- * Detect metadata-related information
- *      ↓
- * Return structured metadata constraints
+ * {
+ *     source: file.path,
+ *     path: file.path,
+ *     language: getLanguage(file.path)
+ * }
  *
  * Example:
  *
- * "Show me the Python authentication code"
+ * "Show me the authentication code written in Python"
  *
- * becomes:
+ * =>
+ *
+ * {
+ *     language: "python",
+ *     path: null,
+ *     source: null
+ * }
+ *
+ *
+ * "Show me authController.js"
+ *
+ * =>
+ *
+ * {
+ *     language: null,
+ *     path: "authController.js",
+ *     source: null
+ * }
+ *
+ *
+ * "How does authentication work?"
+ *
+ * =>
+ *
+ * {
+ *     language: null,
+ *     path: null,
+ *     source: null
+ * }
+ */
+
+async function extractMetadata(question) {
+
+    const prompt = `
+You are a metadata extraction system for a codebase RAG system.
+
+The indexed documents contain these metadata fields:
+
+- language: programming language of the file
+- path: file path
+- source: source file path
+
+Analyze the user's query and extract ONLY metadata constraints
+that are explicitly stated or strongly implied by the query.
+
+Rules:
+
+1. Do NOT answer the user's question.
+2. Do NOT invent metadata.
+3. If the user does not specify a metadata constraint, return null.
+4. For language, normalize common names, for example:
+   - JS / JavaScript -> javascript
+   - TS / TypeScript -> typescript
+   - Py / Python -> python
+   - C++ / cpp -> cpp
+   - C# / csharp -> csharp
+   - Golang -> go
+5. If a filename or path is explicitly mentioned, return it.
+6. Keep path/source values exactly as they appear in the query as much as possible.
+7. Metadata extraction should be conservative.
+
+User query:
+"${question}"
+`;
+
+    try {
+
+        const response = await ai.models.generateContent({
+            model: "gemini-3.6-flash",
+            contents: prompt,
+
+            config: {
+                responseMimeType: "application/json",
+
+                responseSchema: {
+                    type: "object",
+
+                    properties: {
+                        language: {
+                            type: ["string", "null"]
+                        },
+
+                        path: {
+                            type: ["string", "null"]
+                        },
+
+                        source: {
+                            type: ["string", "null"]
+                        }
+                    },
+
+                    required: [
+                        "language",
+                        "path",
+                        "source"
+                    ]
+                }
+            }
+        });
+
+
+        const metadata = JSON.parse(response.text);
+
+        console.log(
+            "[DEBUG] Extracted metadata:",
+            metadata
+        );
+
+        return metadata;
+
+    } catch (error) {
+
+        console.error(
+            "[ERROR] Metadata extraction failed:",
+            error.message
+        );
+
+        /*
+         * If metadata extraction fails, don't break retrieval.
+         *
+         * Fall back to normal vector search.
+         */
+
+        return {
+            language: null,
+            path: null,
+            source: null
+        };
+    }
+}
+
+
+/*
+ * =========================================================
+ * 2. BUILD QDRANT FILTER
+ * =========================================================
+ *
+ * Convert extracted metadata into a Qdrant filter.
+ *
+ * Example:
  *
  * {
  *     language: "python"
  * }
  *
- * "Show me authController.js"
- *
- * becomes:
+ * =>
  *
  * {
- *     path: "authController.js"
+ *     must: [
+ *         {
+ *             key: "metadata.language",
+ *             match: {
+ *                 value: "python"
+ *             }
+ *         }
+ *     ]
  * }
- *
- * If no metadata constraint is present:
- *
- * {}
- *
- * NOTE:
- * This is the first/simple version.
- * Later, this can be replaced by an LLM-based
- * structured metadata extraction step.
  */
 
-function extractMetadataFilters(question) {
-    const query = question.toLowerCase();
+function buildQdrantFilter(metadata) {
 
-    const filters = {};
-
-
-    /*
-     * -------------------------
-     * Language detection
-     * -------------------------
-     */
-
-    const languages = {
-        javascript: ["javascript", "js"],
-        typescript: ["typescript", "ts"],
-        python: ["python", "py"],
-        java: ["java"],
-        cpp: ["c++", "cpp"],
-        csharp: ["c#", "csharp"],
-        go: ["golang"],
-        rust: ["rust"],
-        php: ["php"]
-    };
-
-    for (const [language, keywords] of Object.entries(languages)) {
-        const found = keywords.some((keyword) => {
-            if (keyword.length <= 2) {
-                return new RegExp(`\\b${keyword}\\b`, "i").test(query);
-            }
-
-            return query.includes(keyword);
-        });
-
-        if (found) {
-            filters.language = language;
-            break;
-        }
-    }
-
-
-    /*
-     * -------------------------
-     * File/path detection
-     * -------------------------
-     *
-     * This is deliberately conservative.
-     *
-     * We only try to detect a path/file constraint
-     * when the user explicitly refers to a file/path.
-     */
-
-    const pathPatterns = [
-        /(?:file|filename|path)\s+(?:is|called|named)?\s*["']?([^"'?]+)["']?/i,
-        /(?:inside|in|under)\s+(?:the\s+)?(?:folder|directory)\s+["']?([^"'?]+)["']?/i
-    ];
-
-    for (const pattern of pathPatterns) {
-        const match = question.match(pattern);
-
-        if (match?.[1]) {
-            filters.path = match[1].trim();
-            break;
-        }
-    }
-
-
-    return filters;
-}
-
-
-/*
- * ---------------------------------------------------------
- * 2. Build Qdrant filter from metadata constraints
- * ---------------------------------------------------------
- *
- * This function does NOT know anything about the user's
- * natural-language query.
- *
- * It only converts structured metadata into Qdrant syntax.
- */
-
-function buildQdrantFilter(metadataFilters) {
     const conditions = [];
 
 
     /*
-     * Language filter
+     * Language
      */
 
-    if (metadataFilters.language) {
+    if (metadata.language) {
+
         conditions.push({
             key: "metadata.language",
+
             match: {
-                value: metadataFilters.language
+                value: metadata.language
             }
         });
     }
 
 
     /*
-     * Path filter
-     *
-     * NOTE:
-     * Exact matching is used here for now.
-     * We can improve this later for folder/path
-     * substring matching.
+     * Path
      */
 
-    if (metadataFilters.path) {
+    if (metadata.path) {
+
         conditions.push({
             key: "metadata.path",
+
             match: {
-                value: metadataFilters.path
+                value: metadata.path
+            }
+        });
+    }
+
+
+    /*
+     * Source
+     */
+
+    if (metadata.source) {
+
+        conditions.push({
+            key: "metadata.source",
+
+            match: {
+                value: metadata.source
             }
         });
     }
@@ -176,7 +253,7 @@ function buildQdrantFilter(metadataFilters) {
 
 
     /*
-     * Multiple metadata conditions use AND.
+     * Multiple conditions use AND.
      */
 
     return {
@@ -186,9 +263,9 @@ function buildQdrantFilter(metadataFilters) {
 
 
 /*
- * ---------------------------------------------------------
- * 3. Main retrieval function
- * ---------------------------------------------------------
+ * =========================================================
+ * 3. MAIN RETRIEVAL FUNCTION
+ * =========================================================
  */
 
 export async function retrieveDocuments(question) {
@@ -200,25 +277,20 @@ export async function retrieveDocuments(question) {
 
     /*
      * ---------------------------------------------------------
-     * Step 1: Extract metadata constraints
+     * Step 1: Extract metadata from query
      * ---------------------------------------------------------
      */
 
-    const metadataFilters = extractMetadataFilters(question);
-
-    console.log(
-        "[DEBUG] Extracted metadata constraints:",
-        metadataFilters
-    );
+    const metadata = await extractMetadata(question);
 
 
     /*
      * ---------------------------------------------------------
-     * Step 2: Convert metadata constraints into Qdrant filter
+     * Step 2: Build Qdrant filter
      * ---------------------------------------------------------
      */
 
-    const qdrantFilter = buildQdrantFilter(metadataFilters);
+    const qdrantFilter = buildQdrantFilter(metadata);
 
     console.log(
         "[DEBUG] Qdrant filter:",
@@ -240,7 +312,7 @@ export async function retrieveDocuments(question) {
 
     /*
      * ---------------------------------------------------------
-     * Step 4: Connect to existing Qdrant collection
+     * Step 4: Connect to Qdrant
      * ---------------------------------------------------------
      */
 
@@ -250,6 +322,7 @@ export async function retrieveDocuments(question) {
             {
                 url: process.env.QDRANT_URL,
                 apiKey: process.env.QDRANT_API_KEY,
+
                 collectionName: COLLECTION_NAME,
 
                 contentPayloadKey: "page_content",
@@ -260,16 +333,8 @@ export async function retrieveDocuments(question) {
 
     /*
      * ---------------------------------------------------------
-     * Step 5: Retrieve documents
+     * Step 5: Vector retrieval + metadata filtering
      * ---------------------------------------------------------
-     *
-     * If metadata constraints exist:
-     *
-     *     vector search + metadata filter
-     *
-     * Otherwise:
-     *
-     *     normal vector search
      */
 
     const k = 8;
@@ -289,20 +354,20 @@ export async function retrieveDocuments(question) {
 
     /*
      * ---------------------------------------------------------
-     * Step 6: Handle empty results
+     * Step 6: Handle no results
      * ---------------------------------------------------------
      */
 
     if (results.length === 0) {
 
         console.warn(
-            "[WARN] Qdrant returned 0 results!"
+            "[WARN] Qdrant returned 0 results."
         );
 
         if (qdrantFilter) {
+
             console.warn(
-                "[WARN] Metadata filtering was applied. " +
-                "No documents matched the detected constraints."
+                "[WARN] Metadata filtering was applied."
             );
         }
     }
@@ -310,7 +375,7 @@ export async function retrieveDocuments(question) {
 
     /*
      * ---------------------------------------------------------
-     * Step 7: Debug retrieved documents
+     * Step 7: Process retrieved documents
      * ---------------------------------------------------------
      */
 
@@ -318,7 +383,9 @@ export async function retrieveDocuments(question) {
 
     results.forEach(([doc, score], index) => {
 
-        console.log(`\n[DEBUG] Result ${index + 1}:`);
+        console.log(
+            `\n[DEBUG] Result ${index + 1}:`
+        );
 
         console.log(
             `  Similarity Score: ${score}`

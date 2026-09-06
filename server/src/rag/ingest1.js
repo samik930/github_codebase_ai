@@ -140,7 +140,7 @@ async function embedBatch(texts, retries = 10) {
 // Main ingestion function
 // --------------------------------
 
-export async function ingestDocuments(files) {
+export async function ingestDocuments(files, onProgress) {
 
     console.log("Starting ingestion...");
 
@@ -174,6 +174,19 @@ export async function ingestDocuments(files) {
     const chunks = await splitter.splitDocuments(documents);
 
     console.log(`Created ${chunks.length} chunks`);
+
+    const totalBatches = Math.ceil(chunks.length / BATCH_SIZE);
+
+    if (typeof onProgress === "function") {
+        onProgress({
+            type: "start",
+            totalChunks: chunks.length,
+            totalBatches,
+            processedChunks: 0,
+            currentBatch: 0,
+            percent: 0
+        });
+    }
 
 
     // --------------------------------
@@ -374,6 +387,19 @@ export async function ingestDocuments(files) {
             `Total processed: ` +
             `${totalProcessed}/${chunks.length}`
         );
+
+        const percent = Math.min(100, Math.round((totalProcessed / chunks.length) * 100));
+
+        if (typeof onProgress === "function") {
+            onProgress({
+                type: "progress",
+                totalChunks: chunks.length,
+                totalBatches,
+                processedChunks: totalProcessed,
+                currentBatch: batchNumber,
+                percent
+            });
+        }
 
 
         // --------------------------------

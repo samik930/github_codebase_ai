@@ -5,11 +5,28 @@ import { parseGithubURL, getRepository, getRepositoryTree, getUsefulFiles } from
 
 
 export async function ingestController(req, res) {
+    // Enable Server-Sent Events (SSE) streaming for real-time batch progress
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+
+    const sendEvent = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
     try {
-        const {githubUrl} = req.body
+        const { githubUrl } = req.body;
+        if (!githubUrl) {
+            sendEvent({ type: 'error', error: 'GitHub URL is required' });
+            return res.end();
+        }
+
         const { owner, repo } = parseGithubURL(githubUrl);
         console.log("Owner:", owner);
         console.log("Repo:", repo);
+
+        sendEvent({ type: 'status', message: 'Connecting to GitHub API...' });
+
         const repository = await getRepository(owner, repo);
         const tree = await getRepositoryTree(
             owner,
@@ -20,24 +37,33 @@ export async function ingestController(req, res) {
             owner,
             repo,
             tree
-        )
-        console.log(`Downloaded ${files.length} files`);
-        const chunksCount = await ingestDocuments(files);
+        );
 
-        res.json({
+        console.log(`Downloaded ${files.length} files`);
+        sendEvent({ type: 'status', message: `Downloaded ${files.length} files. Splitting codebase into chunks...` });
+
+        const chunksCount = await ingestDocuments(files, (progressData) => {
+            sendEvent(progressData);
+        });
+
+        sendEvent({
+            type: "complete",
             message: "Repository ingested successfully",
             repository: `${owner}/${repo}`,
-            files : files.length,
-            chunks : chunksCount,
+            files: files.length,
+            chunks: chunksCount,
+            percent: 100
         });
+
+        res.end();
 
     } catch (error) {
-
-        console.error(error);
-
-        res.status(500).json({
-            error: "Ingestion failed"
+        console.error("[ERROR] Ingestion failed:", error);
+        sendEvent({
+            type: "error",
+            error: error.message || "Ingestion failed"
         });
+        res.end();
     }
 }
 
