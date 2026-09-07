@@ -53,35 +53,6 @@ function getLanguage(file) {
     return languages[extension] || "text";
 }
 
-function getFilesRecursively(directory) {
-    const entries = fs.readdirSync(directory, {
-        withFileTypes: true
-    });
-
-    const files = [];
-
-    for (const entry of entries) {
-        const fullPath = path.join(directory, entry.name);
-
-        if (entry.isDirectory()) {
-            if (IGNORED_DIRECTORIES.includes(entry.name)) {
-                continue;
-            }
-
-            files.push(...getFilesRecursively(fullPath));
-        } else {
-            if (IGNORED_FILES.includes(entry.name)) {
-                continue;
-            }
-
-            files.push(fullPath);
-        }
-    }
-
-    return files;
-}
-
-
 // --------------------------------
 // Gemini batch embedding
 // --------------------------------
@@ -91,12 +62,12 @@ async function embedBatch(texts, retries = 10) {
     for (let attempt = 1; attempt <= retries; attempt++) {
 
         try {
-
+            //Gemini process the texts and generate embeddings
             const response = await ai.models.embedContent({
                 model: "gemini-embedding-001",
                 contents: texts
             });
-
+            //maps only the embedding values 
             return response.embeddings.map(
                 embedding => embedding.values
             );
@@ -121,7 +92,7 @@ async function embedBatch(texts, retries = 10) {
                     `Attempt ${attempt}/${retries}. ` +
                     `Waiting 20 seconds...`
                 );
-
+                //current operation will finish after 20 seconds
                 await new Promise(
                     resolve => setTimeout(resolve, 20000)
                 );
@@ -227,7 +198,7 @@ export async function ingestDocuments(files, onProgress) {
         {
             vectors: {
                 size: VECTOR_SIZE,
-                distance: "Cosine"
+                distance: "Cosine" //determining the similarity b/w two vectors
             }
         }
     );
