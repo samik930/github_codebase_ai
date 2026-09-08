@@ -8,6 +8,7 @@ import { Document } from "@langchain/core/documents";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { GoogleGenAI } from "@google/genai";
 import { QdrantClient } from "@qdrant/js-client-rest";
+import { isSensitiveFile, redactSensitiveContent } from "./sensitiveGuard.js";
 
 // ============================================================
 // CONFIGURATION
@@ -517,8 +518,21 @@ async function ensureCollection(qdrant) {
         }
     );
 
+    await qdrant.createPayloadIndex(COLLECTION_NAME, {
+        field_name: "metadata.language",
+        field_schema: "keyword"
+    });
+    await qdrant.createPayloadIndex(COLLECTION_NAME, {
+        field_name: "metadata.path",
+        field_schema: "keyword"
+    });
+    await qdrant.createPayloadIndex(COLLECTION_NAME, {
+        field_name: "metadata.source",
+        field_schema: "keyword"
+    });
+
     console.log(
-        "Qdrant collection created and reset."
+        "Qdrant collection created and reset with payload indexes."
     );
 }
 
@@ -560,12 +574,15 @@ async function deletePoints(
 async function createChunks(
     file
 ) {
+    if (isSensitiveFile(file.path)) {
+        return [];
+    }
 
     const document =
         new Document({
 
             pageContent:
-                file.content,
+                redactSensitiveContent(file.content),
 
             metadata: {
 

@@ -2,7 +2,7 @@ import { ingestDocuments } from "../rag/ingest1.js";
 import { retrieveDocuments } from "../rag/retrieve.js";
 import { generateAnswer } from "../rag/generate.js";
 import { parseGithubURL, getRepository, getRepositoryTree, getUsefulFiles } from "../github/downloadRepo.js";
-
+import { detectSensitiveQueryIntent } from "../rag/sensitiveGuard.js";
 
 export async function ingestController(req, res) {
     // Enable Server-Sent Events (SSE) streaming for real-time batch progress
@@ -71,11 +71,21 @@ export async function queryController(req, res) {
 
     try {
 
-        const {question} = req.body;
+        const { question } = req.body;
 
         if (!question) {
             return res.status(400).json({
                 error: "Question is required"
+            });
+        }
+
+        // Security Guardrail: Check for requests asking for sensitive data
+        const intentCheck = detectSensitiveQueryIntent(question);
+        if (intentCheck.isSensitive) {
+            console.warn(`[SECURITY GUARD] Blocked sensitive request for query: "${question}"`);
+            return res.json({
+                answer: "For security reasons, I cannot disclose sensitive information, API keys, database connection strings, passwords, secrets, or credentials.",
+                sources: []
             });
         }
 

@@ -91,7 +91,6 @@ Rules:
 5. If a filename or path is explicitly mentioned, return it.
 6. Keep path/source values exactly as they appear in the query as much as possible.
 7. Metadata extraction should be conservative.
-
 User query:
 "${question}"
 `;

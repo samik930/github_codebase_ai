@@ -1,6 +1,6 @@
 import "dotenv/config";
-
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
+import { redactSensitiveContent } from "./sensitiveGuard.js";
 
 export async function generateAnswer(question, documents) {
     console.log(`\n[DEBUG] --- Starting Answer Generation ---`);
@@ -34,9 +34,14 @@ You are an expert AI assistant for analyzing software codebases.
 
 Your task is to answer the user's question by thoroughly analyzing the provided codebase context (source code files, functions, resolvers, configurations, and exports).
 
-Instructions:
+CRITICAL SECURITY POLICY:
+1. Under NO circumstances should you reveal, output, or display sensitive information such as API keys, database connection strings/URLs, passwords, private keys, authentication tokens, or secret credentials.
+2. If the user asks for sensitive information (e.g. API keys, DB URLs, secrets, passwords, or credentials), explicitly refuse the request by stating: "For security reasons, I cannot disclose sensitive information, API keys, database URLs, or credentials."
+3. Do not include raw secrets or credentials in code snippets or explanations.
+
+General Instructions:
 1. Carefully analyze the provided code snippets and files to answer the user's question.
-2. If the user asks what the project does, explain and infer its functionality, tech stack, endpoints, and purpose directly from the provided code, resolvers, and functions (e.g. user operations, server setup, GraphQL resolvers).
+2. If the user asks what the project does, explain and infer its functionality, tech stack, endpoints, and purpose directly from the provided code, resolvers, and functions.
 3. Provide a clear, concise, and professional answer based on the code provided.
 4. Only state that you could not find the information if the provided context is completely empty or completely unrelated.
 
@@ -50,6 +55,7 @@ ${question}
 `;
 
     const response = await model.invoke(prompt);
+    const safeAnswer = redactSensitiveContent(response.content);
 
     // Deduplicate sources by path
     const uniqueSourcesMap = new Map();
@@ -65,7 +71,7 @@ ${question}
     });
 
     return {
-        answer: response.content,
+        answer: safeAnswer,
         sources: Array.from(uniqueSourcesMap.values())
     };
 }

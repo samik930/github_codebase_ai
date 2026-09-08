@@ -7,6 +7,7 @@ import { Document } from "@langchain/core/documents";
 import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { GoogleGenAI } from "@google/genai";
 import { QdrantClient } from "@qdrant/js-client-rest";
+import { isSensitiveFile, redactSensitiveContent } from "./sensitiveGuard.js";
 
 const COLLECTION_NAME = "codebase_documents";
 const VECTOR_SIZE = 3072;
@@ -120,10 +121,12 @@ export async function ingestDocuments(files, onProgress) {
     // 1. Create LangChain documents
     // --------------------------------
 
-    const documents = files.map(
+    const safeFiles = files.filter(file => !isSensitiveFile(file.path));
+
+    const documents = safeFiles.map(
         file =>
             new Document({
-                pageContent: file.content,
+                pageContent: redactSensitiveContent(file.content),
                 metadata: {
                     source: file.path,
                     path: file.path,
@@ -204,6 +207,21 @@ export async function ingestDocuments(files, onProgress) {
     );
 
     console.log("Qdrant collection created and reset for new repository");
+
+    console.log("Creating payload indexes for metadata fields...");
+    await qdrant.createPayloadIndex(COLLECTION_NAME, {
+        field_name: "metadata.language",
+        field_schema: "keyword"
+    });
+    await qdrant.createPayloadIndex(COLLECTION_NAME, {
+        field_name: "metadata.path",
+        field_schema: "keyword"
+    });
+    await qdrant.createPayloadIndex(COLLECTION_NAME, {
+        field_name: "metadata.source",
+        field_schema: "keyword"
+    });
+    console.log("Payload indexes created successfully");
 
 
     // --------------------------------
