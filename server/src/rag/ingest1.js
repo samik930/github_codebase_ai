@@ -8,6 +8,7 @@ import { RecursiveCharacterTextSplitter } from "@langchain/textsplitters";
 import { GoogleGenAI } from "@google/genai";
 import { QdrantClient } from "@qdrant/js-client-rest";
 import { isSensitiveFile, redactSensitiveContent } from "./sensitiveGuard.js";
+import { createBM25Index, saveBM25Index } from "./bm25.js";
 
 const COLLECTION_NAME = "codebase_documents";
 const VECTOR_SIZE = 3072;
@@ -16,6 +17,13 @@ const BATCH_SIZE = 20;
 const ai = new GoogleGenAI({
     apiKey: process.env.GOOGLE_API_KEY
 });
+
+const BM25_INDEX_PATH =
+    path.join(
+        process.cwd(),
+        "data",
+        "bm25-index.json"
+    );
 
 const IGNORED_DIRECTORIES = [
     "node_modules",
@@ -147,7 +155,24 @@ export async function ingestDocuments(files, onProgress) {
 
     const chunks = await splitter.splitDocuments(documents);
 
+    // Give every chunk a stable ID.
+    // This ID will be shared by Qdrant and BM25.
+    chunks.forEach((chunk, index) => {
+        chunk.metadata.chunkId = index + 1;
+    });
+
     console.log(`Created ${chunks.length} chunks`);
+
+    const bm25Index = createBM25Index(chunks);
+
+    saveBM25Index(
+        bm25Index,
+        BM25_INDEX_PATH
+    );
+
+    console.log(
+        `BM25 index created with ${chunks.length} documents`
+    );
 
     const totalBatches = Math.ceil(chunks.length / BATCH_SIZE);
 

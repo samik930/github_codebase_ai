@@ -1,10 +1,22 @@
 import "dotenv/config";
-
+import path from "path";
 import { GoogleGenAI } from "@google/genai";
 import { GoogleGenerativeAIEmbeddings } from "@langchain/google-genai";
 import { QdrantVectorStore } from "@langchain/qdrant";
+import {
+    loadBM25Index,
+    searchBM25
+} from "./bm25.js";
+import { callGeminiWithRetry } from "../utils/geminiRetry.js";
+import { rewriteQuery } from "./queryRewriter.js"
 
 const COLLECTION_NAME = "codebase_documents";
+
+const BM25_INDEX_PATH = path.join(
+    process.cwd(),
+    "data",
+    "bm25-index.json"
+);
 
 const ai = new GoogleGenAI({
     apiKey: process.env.GOOGLE_API_KEY
@@ -64,6 +76,26 @@ const ai = new GoogleGenAI({
 
 async function extractMetadata(question) {
 
+    // Fast heuristic pre-check to reduce unnecessary Gemini API calls on general questions
+    const METADATA_KEYWORDS = [
+        ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".cpp", ".c", ".cs", ".go", ".rs", ".php",
+        ".json", ".yml", ".yaml", ".md", ".html", ".css", ".env", ".sql", ".docker",
+        "javascript", "js", "typescript", "ts", "python", "py", "java", "cpp", "c++",
+        "csharp", "c#", "golang", "go", "rust", "php", "path", "file", "controller",
+        "route", "service", "model", "config", "src/", "server/", "client/", "/"
+    ];
+    const lowerQ = question.toLowerCase();
+    const hasMetadataKeyword = METADATA_KEYWORDS.some(kw => lowerQ.includes(kw));
+
+    if (!hasMetadataKeyword) {
+        console.log("[DEBUG] Query contains no file/language/path metadata indicators. Skipping Gemini call for metadata extraction.");
+        return {
+            language: null,
+            path: null,
+            source: null
+        };
+    }
+
     const prompt = `
 You are a metadata extraction system for a codebase RAG system.
 
@@ -97,38 +129,41 @@ User query:
 
     try {
 
-        const response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: prompt,
+        const response = await callGeminiWithRetry(
+            "Metadata Extraction",
+            () => ai.models.generateContent({
+                model: "gemini-3.6-flash",
+                contents: prompt,
 
-            config: {
-                responseMimeType: "application/json",
+                config: {
+                    responseMimeType: "application/json",
 
-                responseSchema: {
-                    type: "object",
+                    responseSchema: {
+                        type: "object",
 
-                    properties: {
-                        language: {
-                            type: ["string", "null"]
+                        properties: {
+                            language: {
+                                type: ["string", "null"]
+                            },
+
+                            path: {
+                                type: ["string", "null"]
+                            },
+
+                            source: {
+                                type: ["string", "null"]
+                            }
                         },
 
-                        path: {
-                            type: ["string", "null"]
-                        },
-
-                        source: {
-                            type: ["string", "null"]
-                        }
-                    },
-
-                    required: [
-                        "language",
-                        "path",
-                        "source"
-                    ]
+                        required: [
+                            "language",
+                            "path",
+                            "source"
+                        ]
+                    }
                 }
-            }
-        });
+            })
+        );
 
 
         const metadata = JSON.parse(response.text);
@@ -192,7 +227,6 @@ User query:
 function buildQdrantFilter(metadata) {
 
     const conditions = [];
-
 
     /*
      * Language
@@ -267,6 +301,95 @@ function buildQdrantFilter(metadata) {
  * =========================================================
  */
 
+function reciprocalRankFusion(
+    denseResults,
+    sparseResults
+) {
+
+    const scores = new Map();
+    const documents = new Map();
+
+    const RRF_K = 60;
+
+    // -----------------------------
+    // Dense results
+    // -----------------------------
+
+    denseResults.forEach(
+        ([doc, score], index) => {
+
+            const id =
+                doc.metadata?.chunkId;
+
+            if (!id) {
+                return;
+            }
+
+            const rank = index + 1;
+
+            const rrfScore =
+                1 / (RRF_K + rank);
+
+            scores.set(
+                id,
+                (scores.get(id) || 0) +
+                rrfScore
+            );
+
+            documents.set(
+                id,
+                doc
+            );
+        }
+    );
+
+
+    // -----------------------------
+    // Sparse results
+    // -----------------------------
+
+    sparseResults.forEach(
+        ({ document }, index) => {
+
+            const id =
+                document.metadata?.chunkId;
+
+            if (!id) {
+                return;
+            }
+
+            const rank = index + 1;
+
+            const rrfScore =
+                1 / (RRF_K + rank);
+
+            scores.set(
+                id,
+                (scores.get(id) || 0) +
+                rrfScore
+            );
+
+            documents.set(
+                id,
+                document
+            );
+        }
+    );
+
+
+    // -----------------------------
+    // Sort by RRF score
+    // -----------------------------
+
+    return [...scores.entries()]
+        .sort(
+            (a, b) => b[1] - a[1]
+        )
+        .map(
+            ([id]) => documents.get(id)
+        );
+}
+
 export async function retrieveDocuments(question) {
 
     console.log(
@@ -279,7 +402,7 @@ export async function retrieveDocuments(question) {
      * Step 1: Extract metadata from query
      * ---------------------------------------------------------
      */
-
+    const rewrittenQuery = await rewriteQuery(question);
     const metadata = await extractMetadata(question);
 
 
@@ -295,6 +418,11 @@ export async function retrieveDocuments(question) {
         "[DEBUG] Qdrant filter:",
         qdrantFilter ?? "NONE"
     );
+
+    const bm25Index =
+        loadBM25Index(
+            BM25_INDEX_PATH
+        );
 
 
     /*
@@ -326,7 +454,7 @@ export async function retrieveDocuments(question) {
 
                 contentPayloadKey: "page_content",
                 metadataPayloadKey: "metadata"
-            }
+            } 
         );
 
 
@@ -336,85 +464,83 @@ export async function retrieveDocuments(question) {
      * ---------------------------------------------------------
      */
 
-    const k = 8;
-
-    const results =
-        await vectorStore.similaritySearchWithScore(
-            question,
-            k,
-            qdrantFilter
+    const denseResults =
+        await callGeminiWithRetry(
+            "Query Vector Embedding",
+            () => vectorStore.similaritySearchWithScore(
+                rewrittenQuery,
+                10,
+                qdrantFilter
+            )
         );
 
+    const sparseResults =  searchBM25(
+            bm25Index,
+            rewrittenQuery,
+            metadata,
+            10
+        );
 
     console.log(
-        `[DEBUG] Number of Qdrant results retrieved: ${results.length}`
+        `[DEBUG] Dense results length: ${denseResults.length}`
+    );
+
+    console.log(
+        `[DEBUG] Sparse results length: ${sparseResults.length}`
+    );
+
+    const finalDocuments =
+        reciprocalRankFusion(
+            denseResults,
+            sparseResults
+        );
+
+    const documents = finalDocuments.slice(0,8)
+
+    console.log(
+        `[DEBUG] Final hybrid results: ${documents.length}`
     );
 
 
     /*
      * ---------------------------------------------------------
-     * Step 6: Handle no results
+     * Step 6: Process retrieved documents
      * ---------------------------------------------------------
      */
 
-    if (results.length === 0) {
+    documents.forEach(
+        (doc, index) => {
 
-        console.warn(
-            "[WARN] Qdrant returned 0 results."
-        );
+            console.log(
+                `\n[DEBUG] Hybrid Result ${index + 1}:`
+            );
 
-        if (qdrantFilter) {
+            console.log(
+                `  Chunk ID: ${
+                    doc.metadata?.chunkId
+                }`
+            );
 
-            console.warn(
-                "[WARN] Metadata filtering was applied."
+            console.log(
+                `  Source: ${
+                    doc.metadata?.source
+                }`
+            );
+
+            console.log(
+                `  Language: ${
+                    doc.metadata?.language
+                }`
+            );
+
+            console.log(
+                `  Preview: ${
+                    doc.pageContent
+                        ?.slice(0, 150)
+                }...`
             );
         }
-    }
-
-
-    /*
-     * ---------------------------------------------------------
-     * Step 7: Process retrieved documents
-     * ---------------------------------------------------------
-     */
-
-    const documents = [];
-
-    results.forEach(([doc, score], index) => {
-
-        console.log(
-            `\n[DEBUG] Result ${index + 1}:`
-        );
-
-        console.log(
-            `  Similarity Score: ${score}`
-        );
-
-        console.log(
-            `  Source Path: ${
-                doc.metadata?.path ??
-                doc.metadata?.source ??
-                "N/A"
-            }`
-        );
-
-        console.log(
-            `  Language: ${
-                doc.metadata?.language ??
-                "N/A"
-            }`
-        );
-
-        console.log(
-            `  Page Content Preview: ${
-                doc.pageContent
-                    ? doc.pageContent.slice(0, 150) + "..."
-                    : "EMPTY/UNDEFINED"
-            }`
-        );
-
-        documents.push(doc);
-    });
+    );
 
 
     return documents;

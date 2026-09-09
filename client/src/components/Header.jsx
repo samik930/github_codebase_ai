@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, Server, GitBranch, Database } from 'lucide-react';
+import { Cpu, GitBranch } from 'lucide-react';
 import { ThemePicker } from './ThemePicker';
 
 export function Header({ isConnected, activeRepo, currentTheme, onSelectTheme }) {
@@ -20,19 +20,6 @@ export function Header({ isConnected, activeRepo, currentTheme, onSelectTheme })
 
       {/* Telemetry Bar */}
       <div className="hud-telemetry-bar">
-        {/* Backend Connectivity Chip */}
-        <div className={`hud-pill ${isConnected ? 'hud-pill-active' : ''}`}>
-          <div className={`status-dot ${isConnected ? 'online' : 'idle'}`} />
-          <Server size={13} />
-          <span>{isConnected ? 'NODE READY' : 'OFFLINE'}</span>
-        </div>
-
-        {/* Vector DB Engine Telemetry */}
-        <div className="hud-pill">
-          <Database size={13} style={{ color: 'var(--accent-primary)' }} />
-          <span>VECTOR DB: ACTIVE</span>
-        </div>
-
         {/* Active Repo Chip */}
         {activeRepo && (
           <div className="hud-pill hud-pill-active">

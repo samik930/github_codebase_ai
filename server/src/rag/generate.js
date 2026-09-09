@@ -1,6 +1,7 @@
 import "dotenv/config";
 import { ChatGoogleGenerativeAI } from "@langchain/google-genai";
 import { redactSensitiveContent } from "./sensitiveGuard.js";
+import { callGeminiWithRetry } from "../utils/geminiRetry.js";
 
 export async function generateAnswer(question, documents) {
     console.log(`\n[DEBUG] --- Starting Answer Generation ---`);
@@ -54,7 +55,10 @@ Question:
 ${question}
 `;
 
-    const response = await model.invoke(prompt);
+    const response = await callGeminiWithRetry(
+        "Answer Generation",
+        () => model.invoke(prompt)
+    );
     const safeAnswer = redactSensitiveContent(response.content);
 
     // Deduplicate sources by path

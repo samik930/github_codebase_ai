@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.21.0",
+    "@langchain/classic": "^1.0.46",
     "@langchain/core": "^1.2.9",
     "@langchain/google-genai": "^2.3.0",
     "@langchain/qdrant": "^1.0.3",
@@ -19,6 +20,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "langchain": "^1.5.10",
-    "nodemon": "^3.1.14"
+    "nodemon": "^3.1.14",
+    "wink-bm25-text-search": "^3.1.2"
   }
 }
