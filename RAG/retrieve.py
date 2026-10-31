@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 from google import genai
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
-
 from bm25 import load_bm25_index, search_bm25
 from query_rewriter import rewrite_query
 from ingest import get_bm25_path
@@ -24,9 +23,10 @@ def extract_metadata(question: str) -> dict:
     metadata_keywords = [
         ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".cpp", ".c", ".cs", ".go", ".rs", ".php",
         ".json", ".yml", ".yaml", ".md", ".html", ".css", ".env", ".sql", ".docker",
+        ".png", ".jpg", ".jpeg", ".webp", ".svg",
         "javascript", "js", "typescript", "ts", "python", "py", "java", "cpp", "c++",
-        "csharp", "c#", "golang", "go", "rust", "php", "path", "file", "controller",
-        "route", "service", "model", "config", "src/", "server/", "client/", "/"
+        "csharp", "c#", "golang", "go", "rust", "php", "diagram", "flowchart",
+        "path", "file", "controller", "route", "service", "model", "config", "src/", "server/", "client/", "/"
     ]
     
     lower_q = question.lower()
@@ -39,8 +39,8 @@ You are a metadata extraction system for a codebase RAG system.
 
 The indexed documents contain these metadata fields:
 
-- language: programming language of the file
-- path: file path
+- language: programming language of the file (e.g. javascript, typescript, python, cpp, csharp, go, rust, java, php)
+- path: file path (e.g. src/index.js, docs/architecture.md, or assets/diagram.png)
 - source: source file path
 
 Analyze the user's query and extract ONLY metadata constraints
@@ -51,13 +51,17 @@ Rules:
 1. Do NOT answer the user's question.
 2. Do NOT invent metadata.
 3. If the user does not specify a metadata constraint, return null.
-4. For language, normalize common names, for example:
+4. For language, extract ONLY actual programming languages. Normalize common names:
    - JS / JavaScript -> javascript
    - TS / TypeScript -> typescript
    - Py / Python -> python
    - C++ / cpp -> cpp
    - C# / csharp -> csharp
    - Golang -> go
+   - Rust -> rust
+   - Java -> java
+   - PHP -> php
+   Do NOT set language for general concepts like 'diagram', 'architecture', or 'docs' (return null for language instead so all files can be searched).
 5. If a filename or path is explicitly mentioned, return it.
 6. Keep path/source values exactly as they appear in the query as much as possible.
 7. Metadata extraction should be conservative.
@@ -215,12 +219,16 @@ def retrieve_documents(question: str, repo_id: str):
     for i, doc in enumerate(documents):
         meta = doc.get("metadata", {})
         content = doc.get("pageContent", "")
+        doc_type = meta.get("type", "code")
         
-        print(f"\n[DEBUG] Hybrid Result {i + 1}:")
+        print(f"\n[DEBUG] Hybrid Result {i + 1} ({doc_type}):")
         print(f"  Chunk ID: {meta.get('chunkId')}")
         print(f"  Repo ID: {meta.get('repo_id')}")
         print(f"  Source: {meta.get('source')}")
-        print(f"  Language: {meta.get('language')}")
-        print(f"  Preview: {content[:150]}...")
+        print(f"  Type: {doc_type}")
+        if meta.get("raw_url"):
+            print(f"  Raw URL: {meta.get('raw_url')}")
+        safe_preview = content[:150].encode('ascii', errors='replace').decode('ascii').replace('\n', ' ')
+        print(f"  Preview: {safe_preview}...")
         
     return documents

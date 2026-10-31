@@ -19,7 +19,9 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "google-auth-library": "^11.3.2",
     "langchain": "^1.5.10",
+    "mongoose": "^9.11.4",
     "nodemon": "^3.1.14",
     "wink-bm25-text-search": "^3.1.2"
   }

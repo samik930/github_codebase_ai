@@ -3,19 +3,33 @@ import { Header } from './components/Header';
 import { IngestCard } from './components/IngestCard';
 import { RepoStats } from './components/RepoStats';
 import { ChatInterface } from './components/ChatInterface';
+import { LandingPage } from './components/LandingPage';
 
 export default function App() {
   const [isConnected, setIsConnected] = useState(false);
 
-  // Multi-repo state: list of ingested repos + which one is selected
-  const [ingestedRepos, setIngestedRepos] = useState(() => {
+  // Authenticated user state (Google or Demo account)
+  const [user, setUser] = useState(() => {
     try {
-      const stored = localStorage.getItem('codebase_copilot_repos');
+      const stored = localStorage.getItem('codebase_copilot_user');
+      return stored ? JSON.parse(stored) : null;
+    } catch { return null; }
+  });
+
+  const userKey = user ? (user.isDemo ? 'demo' : (user.email || user.id || 'anonymous')) : 'guest';
+
+  // Multi-repo state: isolated per user
+  const [ingestedRepos, setIngestedRepos] = useState(() => {
+    if (!user || user.isDemo) return [];
+    try {
+      const stored = localStorage.getItem(`codebase_copilot_repos_${userKey}`);
       return stored ? JSON.parse(stored) : [];
     } catch { return []; }
   });
+
   const [selectedRepoId, setSelectedRepoId] = useState(() => {
-    return localStorage.getItem('codebase_copilot_selected_repo') || '';
+    if (!user || user.isDemo) return '';
+    return localStorage.getItem(`codebase_copilot_selected_repo_${userKey}`) || '';
   });
 
   const [currentTheme, setCurrentTheme] = useState(() => {
@@ -25,53 +39,92 @@ export default function App() {
   // Derive the activeRepo object from the selected repo ID
   const activeRepo = ingestedRepos.find(r => r.repository === selectedRepoId) || null;
 
-  // Persist repos to localStorage
+  // Persist user to localStorage
   useEffect(() => {
-    localStorage.setItem('codebase_copilot_repos', JSON.stringify(ingestedRepos));
-  }, [ingestedRepos]);
+    if (user) {
+      localStorage.setItem('codebase_copilot_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('codebase_copilot_user');
+    }
+  }, [user]);
 
-  // Persist selected repo to localStorage
+  const handleSignOut = () => {
+    setUser(null);
+    setIngestedRepos([]);
+    setSelectedRepoId('');
+    localStorage.removeItem('codebase_copilot_user');
+  };
+
+  // Persist repos to localStorage ONLY for real accounts (demo is strictly in-memory)
   useEffect(() => {
-    localStorage.setItem('codebase_copilot_selected_repo', selectedRepoId);
-  }, [selectedRepoId]);
+    if (user && !user.isDemo) {
+      localStorage.setItem(`codebase_copilot_repos_${userKey}`, JSON.stringify(ingestedRepos));
+      localStorage.setItem(`codebase_copilot_selected_repo_${userKey}`, selectedRepoId);
+    }
+  }, [ingestedRepos, selectedRepoId, user, userKey]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', currentTheme);
     localStorage.setItem('codebase_copilot_theme', currentTheme);
   }, [currentTheme]);
 
-  // Fetch indexed repositories from backend on mount to sync with actual Qdrant state
+  // Sync repositories when user changes
   useEffect(() => {
+    if (!user) {
+      setIngestedRepos([]);
+      setSelectedRepoId('');
+      return;
+    }
+
+    if (user.isDemo) {
+      // Demo accounts always start fresh with empty repositories (strict separation from cloud accounts)
+      setIngestedRepos([]);
+      setSelectedRepoId('');
+      return;
+    }
+
+    // Google user: load user's local cache first
+    try {
+      const stored = localStorage.getItem(`codebase_copilot_repos_${userKey}`);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setIngestedRepos(parsed);
+        const sel = localStorage.getItem(`codebase_copilot_selected_repo_${userKey}`) || (parsed[0]?.repository || '');
+        setSelectedRepoId(sel);
+      }
+    } catch (e) {}
+
+    // Fetch user-specific indexed repositories from backend MongoDB
     const syncRepos = async () => {
       try {
-        const res = await fetch('/api/repositories');
+        const res = await fetch(`/api/repositories?userId=${encodeURIComponent(userKey)}&isDemo=false`);
         if (res.ok) {
           const data = await res.json();
           const backendRepos = data.repositories || [];
+          const backendRepoIds = new Set(backendRepos.map(r => r.repo_id));
           
-          if (backendRepos.length > 0) {
-            // Merge backend repos with locally stored repos (keep local metadata like ownerAvatar, files, chunks)
+          if (backendRepos.length === 0) {
+            setIngestedRepos([]);
+            setSelectedRepoId('');
+            localStorage.removeItem(`codebase_copilot_repos_${userKey}`);
+            localStorage.removeItem(`codebase_copilot_selected_repo_${userKey}`);
+          } else {
             setIngestedRepos(prev => {
               const prevMap = {};
               prev.forEach(r => { prevMap[r.repository] = r; });
               
               const merged = backendRepos.map(br => ({
                 repository: br.repo_id,
-                // Preserve any existing local metadata
                 ...(prevMap[br.repo_id] || {}),
                 repository: br.repo_id,
               }));
               return merged;
             });
 
-            // If no repo is selected but we have indexed repos, select the first
-            if (!selectedRepoId && backendRepos.length > 0) {
-              setSelectedRepoId(backendRepos[0].repo_id);
-            }
-            // If selected repo is no longer indexed, clear it
-            if (selectedRepoId && !backendRepos.some(r => r.repo_id === selectedRepoId)) {
-              setSelectedRepoId(backendRepos[0]?.repo_id || '');
-            }
+            setSelectedRepoId(prev => {
+              if (prev && backendRepoIds.has(prev)) return prev;
+              return backendRepos[0].repo_id;
+            });
           }
         }
       } catch (err) {
@@ -80,7 +133,7 @@ export default function App() {
     };
 
     syncRepos();
-  }, []);
+  }, [user?.email, user?.isDemo, userKey]);
 
   // Check server connectivity
   useEffect(() => {
@@ -100,7 +153,6 @@ export default function App() {
     const repoId = repoData.repository;
     
     setIngestedRepos(prev => {
-      // Update if already exists, otherwise add
       const exists = prev.some(r => r.repository === repoId);
       if (exists) {
         return prev.map(r => r.repository === repoId ? { ...r, ...repoData } : r);
@@ -116,6 +168,11 @@ export default function App() {
   const handleSelectRepo = (repoId) => {
     setSelectedRepoId(repoId);
   };
+
+  // If user is not authenticated, display the Landing Page
+  if (!user) {
+    return <LandingPage onAuthenticate={setUser} />;
+  }
 
   return (
     <>
@@ -133,19 +190,23 @@ export default function App() {
           onSelectRepo={handleSelectRepo}
           currentTheme={currentTheme}
           onSelectTheme={setCurrentTheme}
+          user={user}
+          onSignOut={handleSignOut}
         />
 
         <main className="main-content-flow" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <IngestCard
             onIngestSuccess={handleIngestSuccess}
             activeRepo={activeRepo}
+            user={user}
           />
+
 
           {/* GitHub Repository Overview — decorative, no AI involvement */}
           {activeRepo && <RepoStats activeRepo={activeRepo} />}
 
           {activeRepo ? (
-            <ChatInterface activeRepo={activeRepo} repoId={selectedRepoId} />
+            <ChatInterface activeRepo={activeRepo} repoId={selectedRepoId} user={user} />
           ) : (
             <div className="glass-card" style={{ textAlign: 'center', padding: '36px 20px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
               <div className="hud-corner hud-corner-tl" />
@@ -168,3 +229,4 @@ export default function App() {
     </>
   );
 }
+

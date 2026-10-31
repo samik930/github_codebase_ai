@@ -60,17 +60,28 @@ const IGNORED_DIRECTORIES = [
     "coverage"
 ];
 
-const IGNORED_EXTENSIONS = [
+const SUPPORTED_IMAGE_EXTENSIONS = [
     ".png",
     ".jpg",
     ".jpeg",
-    ".gif",
-    ".svg",
+    ".webp",
+    ".svg"
+];
+
+const IGNORED_EXTENSIONS = [
     ".ico",
+    ".gif",
     ".mp4",
     ".mp3",
     ".zip",
-    ".exe"
+    ".exe",
+    ".pdf",
+    ".tar",
+    ".gz",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot"
 ];
 
 export function isUsefulFile(filePath) {
@@ -88,10 +99,28 @@ export function isUsefulFile(filePath) {
         .substring(filePath.lastIndexOf("."))
         .toLowerCase();
 
-    if (IGNORED_EXTENSIONS.includes(extension)) {
+    if (IGNORED_EXTENSIONS.includes(extension) || SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
         return false;
     }
     return true;
+}
+
+export function isVisualFile(filePath) {
+    const parts = filePath.split("/");
+
+    const hasIgnoredDirectory = parts.some(
+        part => IGNORED_DIRECTORIES.includes(part)
+    );
+
+    if (hasIgnoredDirectory) {
+        return false;
+    }
+
+    const extension = filePath
+        .substring(filePath.lastIndexOf("."))
+        .toLowerCase();
+
+    return SUPPORTED_IMAGE_EXTENSIONS.includes(extension);
 }
 
 export async function getFileContent(owner, repo, filePath) {
@@ -107,6 +136,22 @@ export async function getFileContent(owner, repo, filePath) {
         .toString("utf-8");
 }
 
+export async function getImageContent(owner, repo, filePath) {
+    try {
+        const response = await axios.get(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${filePath}`,
+            { headers: githubHeaders }
+        );
+
+        const content = response.data.content;
+        if (!content) return null;
+        return content.replace(/\s/g, "");
+    } catch (error) {
+        console.error(`[WARN] Failed to fetch visual asset ${filePath}:`, error.message);
+        return null;
+    }
+}
+
 export async function getUsefulFiles(owner, repo, tree) {
     const files = tree.filter(
         item =>
@@ -117,16 +162,51 @@ export async function getUsefulFiles(owner, repo, tree) {
     const results = [];
 
     for (const file of files) {
-        const content = await getFileContent(
-            owner,
-            repo,
-            file.path
-        );
+        try {
+            const content = await getFileContent(
+                owner,
+                repo,
+                file.path
+            );
 
-        results.push({
-            path: file.path,
-            content: content
-        });
+            results.push({
+                path: file.path,
+                content: content
+            });
+        } catch (err) {
+            console.error(`[WARN] Failed to fetch code file ${file.path}:`, err.message);
+        }
+    }
+
+    return results;
+}
+
+export async function getVisualFiles(owner, repo, tree, branch = "main") {
+    const visualItems = tree.filter(
+        item =>
+            item.type === "blob" &&
+            isVisualFile(item.path)
+    );
+
+    const results = [];
+
+    for (const file of visualItems) {
+        // Skip excessively large images (> 8MB)
+        if (file.size && file.size > 8 * 1024 * 1024) {
+            console.log(`[SKIP] Image ${file.path} is too large (${file.size} bytes)`);
+            continue;
+        }
+
+        const base64Content = await getImageContent(owner, repo, file.path);
+        if (base64Content) {
+            const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${file.path}`;
+            results.push({
+                path: file.path,
+                content: base64Content,
+                raw_url: rawUrl,
+                type: "image"
+            });
+        }
     }
 
     return results;

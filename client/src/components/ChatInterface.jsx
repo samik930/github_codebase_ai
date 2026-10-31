@@ -1,17 +1,18 @@
 import React, { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Send, Bot, User, MessageSquare, Loader2, Sparkles, Trash2, Cpu, Terminal, Zap } from 'lucide-react';
+import { Send, Bot, User, MessageSquare, Loader2, Sparkles, Trash2, Cpu, Terminal, Zap, EyeOff } from 'lucide-react';
 import { SourceViewer } from './SourceViewer';
 
 const QUICK_SUGGESTIONS = [
   "⚡ What does this codebase do?",
+  "📊 Explain the architecture using its diagram",
   "🔍 List all API endpoints & route handlers",
   "🏗️ Explain the architecture & project structure",
   "🛡️ How does error handling or auth work?"
 ];
 
-export function ChatInterface({ activeRepo, repoId }) {
+export function ChatInterface({ activeRepo, repoId, user }) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,13 +26,54 @@ export function ChatInterface({ activeRepo, repoId }) {
     scrollToBottom();
   }, [messages, loading]);
 
+  // Load chat history from backend database when repoId changes (unless user is in demo mode)
   useEffect(() => {
-    setMessages([]);
-    setQuestion('');
-  }, [repoId]);
+    if (!repoId) {
+      setMessages([]);
+      setQuestion('');
+      return;
+    }
 
-  const handleClearChat = () => {
+    if (user?.isDemo) {
+      // Demo mode: purely in-memory, strictly do NOT fetch or store history in DB
+      setMessages([]);
+      setQuestion('');
+      return;
+    }
+
+    const userKey = user?.email || user?.id || '';
+    const fetchHistory = async () => {
+      try {
+        const res = await fetch(`/api/chat?repo_id=${encodeURIComponent(repoId)}&userId=${encodeURIComponent(userKey)}&isDemo=false`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.messages && data.messages.length > 0) {
+            setMessages(data.messages);
+          } else {
+            setMessages([]);
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to load chat history:', err.message);
+      }
+    };
+
+    fetchHistory();
+    setQuestion('');
+  }, [repoId, user?.isDemo, user?.email]);
+
+  const handleClearChat = async () => {
     setMessages([]);
+    if (repoId && !user?.isDemo) {
+      const userKey = user?.email || user?.id || '';
+      try {
+        await fetch(`/api/chat?repo_id=${encodeURIComponent(repoId)}&userId=${encodeURIComponent(userKey)}`, {
+          method: 'DELETE'
+        });
+      } catch (err) {
+        console.warn('Failed to clear chat history on server:', err.message);
+      }
+    }
   };
 
   const handleSend = async (queryText) => {
@@ -49,10 +91,18 @@ export function ChatInterface({ activeRepo, repoId }) {
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: textToSend, repo_id: repoId }),
+        body: JSON.stringify({ 
+          question: textToSend, 
+          repo_id: repoId,
+          no_save: Boolean(user?.isDemo),
+          userId: user?.isDemo ? null : (user?.email || user?.id || null),
+          isDemo: Boolean(user?.isDemo)
+        }),
       });
 
+
       const data = await response.json();
+
 
       if (!response.ok) {
         throw new Error(data.message || data.error || 'Failed to query server');
@@ -129,6 +179,14 @@ export function ChatInterface({ activeRepo, repoId }) {
           </button>
         )}
       </div>
+
+      {/* Demo Mode Notice Banner */}
+      {user?.isDemo && (
+        <div className="demo-incognito-banner" style={{ margin: '10px 18px 0 18px' }}>
+          <EyeOff size={14} style={{ flexShrink: 0 }} />
+          <span>INCOGNITO DEMO MODE: Real-time RAG query pipeline active. History is NOT written to database.</span>
+        </div>
+      )}
 
       {/* Messages Scroll Area */}
       <div className="chat-messages">

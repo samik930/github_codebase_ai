@@ -6,7 +6,6 @@ from pydantic import BaseModel
 import json
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-
 from ingest import ingest_documents, get_bm25_path, sanitize_repo_id, BM25_DIR
 from retrieve import retrieve_documents
 from generate import generate_answer
@@ -30,6 +29,7 @@ class QueryRequest(BaseModel):
 async def ingest_endpoint(request: Request):
     data = await request.json()
     files = data.get("files", [])
+    visual_files = data.get("visual_files", [])
     repo_id = data.get("repo_id", "")
     commit_hash = data.get("commit_hash", "")
     
@@ -39,11 +39,11 @@ async def ingest_endpoint(request: Request):
             content={"type": "error", "error": "repo_id is required for ingestion."}
         )
     
-    print(f"[API] Ingest request: repo_id={repo_id}, commit_hash={commit_hash}, files={len(files)}")
+    print(f"[API] Ingest request: repo_id={repo_id}, commit_hash={commit_hash}, code_files={len(files)}, visual_files={len(visual_files)}")
     
     def generate():
         try:
-            for progress_data in ingest_documents(files, repo_id=repo_id, commit_hash=commit_hash):
+            for progress_data in ingest_documents(files, repo_id=repo_id, commit_hash=commit_hash, visual_files=visual_files):
                 yield f"data: {json.dumps(progress_data)}\n\n"
         except Exception as e:
             import traceback
@@ -94,7 +94,6 @@ async def query_endpoint(request: QueryRequest):
     
     # 2. Generate (with repo boundary)
     result = generate_answer(question, documents, repo_id=repo_id)
-    
     return result
 
 @app.get("/repositories")

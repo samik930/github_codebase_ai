@@ -13,7 +13,7 @@ function GithubIcon({ size = 18, style }) {
   );
 }
 
-export function IngestCard({ onIngestSuccess, activeRepo }) {
+export function IngestCard({ onIngestSuccess, activeRepo, user }) {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -37,8 +37,13 @@ export function IngestCard({ onIngestSuccess, activeRepo }) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ githubUrl: url.trim() }),
+        body: JSON.stringify({ 
+          githubUrl: url.trim(),
+          userId: user?.isDemo ? null : (user?.email || user?.id || null),
+          isDemo: Boolean(user?.isDemo)
+        }),
       });
+
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

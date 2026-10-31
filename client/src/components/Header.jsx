@@ -1,8 +1,18 @@
 import React from 'react';
-import { Cpu, GitBranch, ChevronDown } from 'lucide-react';
+import { Cpu, GitBranch, ChevronDown, LogOut, EyeOff, User as UserIcon } from 'lucide-react';
 import { ThemePicker } from './ThemePicker';
 
-export function Header({ isConnected, activeRepo, ingestedRepos = [], selectedRepoId, onSelectRepo, currentTheme, onSelectTheme }) {
+export function Header({ 
+  isConnected, 
+  activeRepo, 
+  ingestedRepos = [], 
+  selectedRepoId, 
+  onSelectRepo, 
+  currentTheme, 
+  onSelectTheme,
+  user,
+  onSignOut
+}) {
   return (
     <header className="app-header">
       {/* Brand Section */}
@@ -54,9 +64,43 @@ export function Header({ isConnected, activeRepo, ingestedRepos = [], selectedRe
           </div>
         )}
 
+        {/* User Account / Demo Indicator */}
+        {user && (
+          <div 
+            className="user-profile-badge" 
+            style={user.isDemo ? { borderColor: 'rgba(217, 119, 6, 0.4)', background: 'rgba(217, 119, 6, 0.08)' } : {}}
+          >
+            {user.isDemo ? (
+              <EyeOff size={13} style={{ color: 'var(--accent-yellow)', flexShrink: 0 }} />
+            ) : user.avatar ? (
+              <img src={user.avatar} alt={user.name} className="user-profile-avatar" />
+            ) : (
+              <UserIcon size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+            )}
+            <span style={{ 
+              maxWidth: '120px', 
+              overflow: 'hidden', 
+              textOverflow: 'ellipsis', 
+              whiteSpace: 'nowrap',
+              color: user.isDemo ? 'var(--accent-yellow)' : 'var(--text-primary)'
+            }}>
+              {user.isDemo ? 'Demo Mode' : user.name}
+            </span>
+            <button 
+              type="button" 
+              className="btn-signout" 
+              onClick={onSignOut}
+              title={user.isDemo ? "Exit Demo Mode" : `Sign Out (${user.email})`}
+            >
+              <LogOut size={13} />
+            </button>
+          </div>
+        )}
+
         {/* Theme Picker Switcher */}
         <ThemePicker currentTheme={currentTheme} onSelectTheme={onSelectTheme} />
       </div>
     </header>
   );
 }
+

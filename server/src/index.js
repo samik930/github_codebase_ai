@@ -1,11 +1,15 @@
 import express from "express";
 import cors from "cors";
-import router from "./routes/routes.js"
+import router from "./routes/routes.js";
+import { connectDB } from "./db/connect.js";
 
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Initialize MongoDB Connection
+connectDB();
 
 app.get("/", (req, res) => {
     res.json({
