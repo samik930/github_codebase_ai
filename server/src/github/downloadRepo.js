@@ -1,6 +1,5 @@
 import axios from "axios";
 import "dotenv/config";
-import { isSensitiveFile } from "../rag/sensitiveGuard.js";
 
 const githubHeaders = {
     Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
@@ -46,7 +45,10 @@ export async function getRepositoryTree(owner, repo, branch) {
         }
     );
 
-    return response.data.tree;
+    return {
+        tree: response.data.tree,
+        sha: response.data.sha
+    };
 }
 
 const IGNORED_DIRECTORIES = [
@@ -72,10 +74,6 @@ const IGNORED_EXTENSIONS = [
 ];
 
 export function isUsefulFile(filePath) {
-    if (isSensitiveFile(filePath)) {
-        return false;
-    }
-
     const parts = filePath.split("/");
 
     const hasIgnoredDirectory = parts.some(

@@ -11,7 +11,7 @@ const QUICK_SUGGESTIONS = [
   "🛡️ How does error handling or auth work?"
 ];
 
-export function ChatInterface({ activeRepo }) {
+export function ChatInterface({ activeRepo, repoId }) {
   const [messages, setMessages] = useState([]);
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
@@ -27,7 +27,8 @@ export function ChatInterface({ activeRepo }) {
 
   useEffect(() => {
     setMessages([]);
-  }, [activeRepo?.repository]);
+    setQuestion('');
+  }, [repoId]);
 
   const handleClearChat = () => {
     setMessages([]);
@@ -48,7 +49,7 @@ export function ChatInterface({ activeRepo }) {
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: textToSend }),
+        body: JSON.stringify({ question: textToSend, repo_id: repoId }),
       });
 
       const data = await response.json();

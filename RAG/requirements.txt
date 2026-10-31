@@ -1,0 +1,8 @@
+google-genai
+qdrant-client
+langchain-text-splitters
+rank_bm25
+python-dotenv
+
+fastapi
+uvicorn

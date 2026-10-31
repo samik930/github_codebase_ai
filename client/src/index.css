@@ -322,6 +322,64 @@ body {
   background: rgba(37, 99, 235, 0.05);
 }
 
+/* --- Repository Selector Dropdown --- */
+.repo-selector-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 12px;
+  background: #ffffff;
+  border: 1px solid var(--border-glow);
+  border-radius: 999px;
+  position: relative;
+  transition: all 0.25s ease;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.08);
+  min-width: 0;
+}
+
+.repo-selector-wrapper:hover {
+  box-shadow: 0 4px 14px rgba(37, 99, 235, 0.15);
+  border-color: var(--accent-primary);
+}
+
+.repo-selector-wrapper:focus-within {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12), 0 4px 14px rgba(37, 99, 235, 0.15);
+  border-color: var(--accent-primary);
+}
+
+.repo-selector {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  cursor: pointer;
+  padding-right: 16px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-selector option {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 0.85rem;
+  background: var(--bg-card-solid);
+  color: var(--text-primary);
+  padding: 8px;
+}
+
+.repo-selector-chevron {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
@@ -1140,6 +1198,16 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .repo-selector-wrapper {
+    flex-shrink: 0;
+    max-width: 200px;
+  }
+
+  .repo-selector {
+    max-width: 140px;
+    font-size: 0.74rem;
   }
 
   .theme-picker-container {
