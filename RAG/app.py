@@ -21,6 +21,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/")
+async def health_check():
+    return {"status": "ok", "service": "Codebase Copilot RAG Service"}
+
 class QueryRequest(BaseModel):
     question: str
     repo_id: str
