@@ -83,8 +83,8 @@ User query:
         print("[ERROR] Metadata extraction failed:", str(e))
         return {"language": None, "path": None, "source": None}
 
-def build_qdrant_filter(metadata: dict, repo_id: str):
-    """Build Qdrant filter that ALWAYS includes repo_id and optionally language/path/source."""
+def build_qdrant_filter(metadata: dict, repo_id: str, user_id: str = "default_user"):
+    """Build Qdrant filter that ALWAYS enforces both repo_id and user_id isolation."""
     conditions = [
         # repo_id is ALWAYS required — this ensures repo isolation
         qmodels.FieldCondition(
@@ -92,6 +92,13 @@ def build_qdrant_filter(metadata: dict, repo_id: str):
             match=qmodels.MatchValue(value=repo_id)
         )
     ]
+    
+    # user_id is ALWAYS required when present — ensures multi-tenant user isolation
+    if user_id:
+        conditions.append(qmodels.FieldCondition(
+            key="metadata.userId",
+            match=qmodels.MatchValue(value=user_id)
+        ))
     
     if metadata.get("language"):
         conditions.append(qmodels.FieldCondition(
@@ -116,7 +123,6 @@ def reciprocal_rank_fusion(dense_results, sparse_results):
     RRF_K = 60
     
     # Dense results (from Qdrant)
-    # qdrant returns ScoredPoint objects
     for index, point in enumerate(dense_results):
         payload = point.payload or {}
         meta = payload.get("metadata", {})
@@ -129,7 +135,6 @@ def reciprocal_rank_fusion(dense_results, sparse_results):
         
         scores[chunk_id] = scores.get(chunk_id, 0) + rrf_score
         
-        # reconstruct a dict similar to JS Document
         documents_map[chunk_id] = {
             "pageContent": payload.get("page_content", ""),
             "metadata": meta
@@ -158,23 +163,23 @@ def reciprocal_rank_fusion(dense_results, sparse_results):
     sorted_ids = sorted(scores.keys(), key=lambda k: scores[k], reverse=True)
     return [documents_map[chunk_id] for chunk_id in sorted_ids]
 
-def retrieve_documents(question: str, repo_id: str):
+def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user"):
     print(f"\n[DEBUG] === Starting Retrieval ===")
-    print(f"[DEBUG] Repository: {repo_id}")
+    print(f"[DEBUG] Repository: {repo_id}, User: {user_id}")
     print(f"[DEBUG] Query: \"{question}\"")
     
     rewritten_query = rewrite_query(question)
     metadata = extract_metadata(question)
     
-    # Qdrant filter ALWAYS includes repo_id for isolation
-    qdrant_filter = build_qdrant_filter(metadata, repo_id)
+    # Qdrant filter ALWAYS includes repo_id and user_id for strict isolation
+    qdrant_filter = build_qdrant_filter(metadata, repo_id=repo_id, user_id=user_id)
     print(f"[DEBUG] Qdrant filter: {qdrant_filter}")
     
-    # Load repo-specific BM25 index
-    bm25_path = get_bm25_path(repo_id)
+    # Load user- and repo-specific BM25 index
+    bm25_path = get_bm25_path(repo_id, user_id=user_id)
     if not os.path.exists(bm25_path):
-        print(f"[ERROR] BM25 index not found for repo: {repo_id} at {bm25_path}")
-        raise FileNotFoundError(f"Repository '{repo_id}' is not indexed. BM25 index not found.")
+        print(f"[ERROR] BM25 index not found for repo: {repo_id} (user: {user_id}) at {bm25_path}")
+        raise FileNotFoundError(f"Repository '{repo_id}' is not indexed for this user. BM25 index not found.")
     
     bm25_index = load_bm25_index(bm25_path)
     
@@ -193,25 +198,27 @@ def retrieve_documents(question: str, repo_id: str):
     )
     dense_results = dense_response.points
     
-    # Sparse Search (BM25 is already repo-scoped via per-repo index file)
+    # Sparse Search (BM25 is already user- and repo-scoped)
     sparse_results = search_bm25(bm25_index, rewritten_query, limit=10)
     
     print(f"[DEBUG] Dense (Qdrant) results: {len(dense_results)}")
     print(f"[DEBUG] Sparse (BM25) results: {len(sparse_results)}")
     
-    # Verify repo isolation in dense results
+    # Verify strict repo and user isolation in dense results
+    filtered_dense_results = []
     for i, point in enumerate(dense_results):
-        point_repo = point.payload.get("metadata", {}).get("repo_id", "UNKNOWN")
+        meta = point.payload.get("metadata", {})
+        point_repo = meta.get("repo_id", "UNKNOWN")
+        point_user = meta.get("userId", "UNKNOWN")
         if point_repo != repo_id:
             print(f"[WARNING] Cross-repo contamination detected in Qdrant result {i}: expected {repo_id}, got {point_repo}")
+            continue
+        if user_id and point_user != "UNKNOWN" and point_user != user_id:
+            print(f"[SECURITY ALERT] Cross-user contamination prevented in Qdrant result {i}: expected {user_id}, got {point_user}")
+            continue
+        filtered_dense_results.append(point)
     
-    # Verify repo isolation in sparse results
-    for i, result in enumerate(sparse_results):
-        doc_repo = result.get("document", {}).get("metadata", {}).get("repo_id", "UNKNOWN")
-        if doc_repo != repo_id:
-            print(f"[WARNING] Cross-repo contamination detected in BM25 result {i}: expected {repo_id}, got {doc_repo}")
-    
-    final_documents = reciprocal_rank_fusion(dense_results, sparse_results)
+    final_documents = reciprocal_rank_fusion(filtered_dense_results, sparse_results)
     
     documents = final_documents[:8]
     print(f"[DEBUG] Final hybrid (RRF) results: {len(documents)}")
@@ -224,6 +231,7 @@ def retrieve_documents(question: str, repo_id: str):
         print(f"\n[DEBUG] Hybrid Result {i + 1} ({doc_type}):")
         print(f"  Chunk ID: {meta.get('chunkId')}")
         print(f"  Repo ID: {meta.get('repo_id')}")
+        print(f"  User ID: {meta.get('userId')}")
         print(f"  Source: {meta.get('source')}")
         print(f"  Type: {doc_type}")
         if meta.get("raw_url"):

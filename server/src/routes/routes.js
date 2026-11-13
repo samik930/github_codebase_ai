@@ -1,5 +1,8 @@
 import { 
     ingestController, 
+    getJobStatusController,
+    getUserJobsController,
+    retryJobController,
     queryController, 
     repositoriesController,
     getChatHistoryController,
@@ -12,7 +15,14 @@ import { Router } from "express";
 const router = Router();
 
 router.post('/auth/google', googleAuthController);
+
+// Ingestion endpoints
 router.post('/ingest', ingestController);
+router.get('/ingest/status/:jobId', getJobStatusController);
+router.get('/ingest/jobs', getUserJobsController);
+router.post('/ingest/retry/:jobId', retryJobController);
+
+// Query & Repositories endpoints
 router.post('/query', queryController);
 router.get('/repositories', repositoriesController);
 

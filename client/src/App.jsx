@@ -169,6 +169,25 @@ export default function App() {
     setSelectedRepoId(repoId);
   };
 
+  // Handle repository deletion
+  const handleDeleteRepo = async (repoId) => {
+    try {
+      const res = await fetch(`/api/repositories?repo_id=${encodeURIComponent(repoId)}&userId=${encodeURIComponent(userKey)}`, {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        setIngestedRepos(prev => {
+          const updated = prev.filter(r => r.repository !== repoId);
+          const nextSelected = updated[0]?.repository || '';
+          setSelectedRepoId(nextSelected);
+          return updated;
+        });
+      }
+    } catch (err) {
+      console.error('Failed to delete repository:', err);
+    }
+  };
+
   // If user is not authenticated, display the Landing Page
   if (!user) {
     return <LandingPage onAuthenticate={setUser} />;
@@ -188,6 +207,7 @@ export default function App() {
           ingestedRepos={ingestedRepos}
           selectedRepoId={selectedRepoId}
           onSelectRepo={handleSelectRepo}
+          onDeleteRepo={handleDeleteRepo}
           currentTheme={currentTheme}
           onSelectTheme={setCurrentTheme}
           user={user}

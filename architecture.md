@@ -1,451 +1,555 @@
 # Codebase Copilot: Multimodal RAG System Architecture
 
-> **Architecture Specification & Design Documentation**  
+> **Architecture Specification & Systems Design Documentation**  
 > **Repository:** `samik930/github_codebase_ai` (Codebase Copilot)  
-> **Target:** Multimodal RAG Extension for Software Engineering Repositories
+> **Target:** Multimodal Retrieval-Augmented Generation (RAG) for Software Engineering Repositories
 
 ---
 
-## 1. Executive Summary & Existing Architecture Baseline
+## 1. Executive Summary & Problem Statement
 
-Codebase Copilot is a specialized codebase question-answering and search platform built using a three-tier architecture:
-1. **Presentation Layer:** React 18 SPA built with Vite (`client/`).
-2. **Backend for Frontend (BFF):** Node.js + Express server running on port `5000` (`server/`).
-3. **RAG Microservice:** Python FastAPI service running on port `8000` (`RAG/`).
+### The Problem
+Traditional developer tools and code-search systems operate in silos:
+- **Code without architectural context** makes it difficult to understand high-level system flows, distributed microservice boundaries, or database relationships.
+- **Architecture diagrams and documentation without connected code** quickly become stale and abstract, leaving developers guessing how designs are actually implemented.
+- **Traditional RAG systems** only ingest text files (`.js`, `.py`, `.md`). They ignore visual assets (`.png`, `.jpg`, `.svg`, `.webp`), discarding critical system knowledge captured in architecture diagrams, database schemas, and sequence charts.
+
+### The Solution: Codebase Copilot
+**Codebase Copilot** is a **Multimodal Retrieval-Augmented Generation (RAG)** platform designed specifically for software codebases. It ingests public GitHub repositories, analyzes both source code and architectural diagrams, and allows developers to ask complex system-level and code-level questions with grounded citations.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│                        EXISTING STACK SUMMARY                          │
+│                        SYSTEM STACK SUMMARY                            │
 ├──────────────────────┬─────────────────────────────────────────────────┤
-│ Frontend             │ React 18 + Vite (client/src/)                   │
-│ Backend For Frontend │ Node.js + Express (server/src/, port 5000)      │
+│ Presentation Layer   │ React 18 + Vite SPA (client/, port 5173)        │
+│ Backend for Frontend │ Node.js + Express (server/, port 5000)          │
 │ RAG Microservice     │ Python FastAPI (RAG/, port 8000)                │
-│ Embedding Model      │ gemini-embedding-2 (3072 dimensions)            │
-│ LLM & Vision Model   │ gemini-3.6-flash (generation, rewriting, guard)  │
-│ Vector Database      │ Qdrant Cloud (collection: codebase_documents)   │
-│ Keyword Search       │ BM25Okapi (per-repository pickle files in data/)│
-│ Fusion Algorithm     │ Reciprocal Rank Fusion (RRF, k=60)              │
+│ Primary Database     │ MongoDB (user accounts, repos, chat histories)  │
+│ Dense Vector DB      │ Qdrant Cloud (collection: codebase_documents)   │
+│ Sparse Lexical DB    │ BM25Okapi (per-repository serialized indexes)   │
+│ Text Embedding Model │ gemini-embedding-2 (3072-dimensional vectors)   │
+│ LLM & Vision Model   │ gemini-3.6-flash (generation, vision, rewriter) │
+│ Rank Fusion Engine   │ Reciprocal Rank Fusion (RRF, k=60)              │
 └──────────────────────┴─────────────────────────────────────────────────┘
 ```
 
-### Existing Codebase File & Function Mapping
+---
 
-- **Client (`client/src/components/`)**:
-  - `IngestCard.jsx`: Captures GitHub URL, initiates SSE stream to `/api/ingest`.
-  - `ChatInterface.jsx`: Query input, message history, markdown rendering with `react-markdown` and `remark-gfm`.
-  - `SourceViewer.jsx`: Referenced file viewer displaying path, language, and similarity telemetry.
-  - `RepoStats.jsx`: Indexed repository selector and stats via `/api/repositories`.
-- **Server BFF (`server/src/`)**:
-  - `index.js`: Express server (port 5000), CORS middleware, `/api` route mounting.
-  - `routes/routes.js`: Maps `/api/ingest`, `/api/query`, `/api/repositories`.
-  - `controllers/controller.js`:
-    - `ingestController()`: Fetches repo metadata, streams SSE progress, dispatches to FastAPI.
-    - `queryController()`: Dispatches queries with `repo_id` to FastAPI.
-    - `repositoriesController()`: Fetches list of indexed repositories from FastAPI.
-  - `github/downloadRepo.js`: GitHub Octokit/Axios integration. Filters file types via `isUsefulFile()`.
-- **RAG Microservice (`RAG/`)**:
-  - `app.py`: FastAPI endpoints (`/ingest`, `/query`, `/repositories`).
-  - `ingest.py`: `RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)`, `gemini-embedding-2` (3072-dim), Qdrant upserts (`codebase_documents`), BM25 index creation.
-  - `bm25.py`: `BM25Okapi` indexing and query scoring (`search_bm25`).
-  - `retrieve.py`: `rewrite_query()`, `extract_metadata()`, dense Qdrant search (limit=10), sparse BM25 search (limit=10), `reciprocal_rank_fusion(dense, sparse)` with $k=60$.
-  - `generate.py`: Context compilation with boundary enforcement and credential protection; answer generation via `gemini-3.6-flash`.
-  - `sensitive_guard.py`: Intent detection, secret file detection, and credential redacting.
+## 2. Core Architectural Principles & Mental Model
+
+To understand Codebase Copilot, consider these four core design principles:
+
+### A. The 3-Tier Separation of Concerns
+The platform uses three distinct tiers, each optimized for its specific workload:
+1. **Client (React SPA):** Provides an interactive UI with real-time progress indicators via Server-Sent Events (SSE), markdown rendering with syntax highlighting, and an interactive source and visual asset viewer.
+2. **Backend for Frontend (Node.js/Express BFF):** Manages user authentication (Google OAuth), user sessions, MongoDB persistence for chat histories and repository metadata, and GitHub API interactions.
+3. **RAG Microservice (Python FastAPI):** Dedicated to compute-heavy AI operations, including file chunking, Gemini Vision asset analysis, embedding generation, Qdrant vector search, BM25 indexing, and answer generation.
+
+### B. Multimodal Grounding (Vision + Code)
+Rather than treating images as raw binary data or relying on generic CLIP embeddings (which struggle with technical text and directional arrows), Codebase Copilot uses a **Vision-to-Semantic-Knowledge pipeline**:
+- When an architecture diagram (`.png`, `.jpg`, `.svg`, etc.) is ingested, **Gemini 3.6 Flash** analyzes it with a specialized systems architect prompt.
+- It extracts identified components, microservices, databases, queues, communication protocols (HTTP, gRPC, Kafka), and exact code labels.
+- This structured description is stored with the original image's GitHub raw URL and embedded into the **same 3072-dimensional vector space** as the source code.
+- Consequently, code files and architectural diagrams can be retrieved together in a single search pass.
+
+### C. Hybrid Search (Dense Vector + Sparse Lexical + RRF)
+Codebases require two complementary search strategies:
+- **Dense Vector Search (Qdrant):** Captures conceptual and semantic intent (e.g., *"How do we handle user authentication?"* finds token middleware even if the word "authentication" is never explicitly written).
+- **Sparse Lexical Search (BM25):** Excels at exact technical keyword matching (e.g., exact class names like `AuthTokenValidator`, endpoint routes like `/api/v1/orders`, or specific variable names).
+- **Reciprocal Rank Fusion (RRF):** Merges the results of both search methods without needing arbitrary score normalization.
+
+### D. Strict Repository Isolation (Multi-Tenancy)
+To prevent cross-repository data leakage:
+- Every point in **Qdrant** is tagged with `metadata.repo_id`, and all vector searches enforce a mandatory filter on `repo_id`.
+- Every repository maintains its own isolated **BM25 index file** on disk (`data/bm25-{repo_id}.pkl`).
+- All generation prompts enforce a strict repository boundary instruction.
 
 ---
 
-## 2. Complete Multimodal RAG System Architecture Diagram
+## 3. High-Level Architecture Blueprint
+
+The following diagram illustrates how all components connect across the three tiers:
 
 ```mermaid
 flowchart TB
     %% =========================================================================
-    %% LAYER 1: PRESENTATION LAYER
+    %% TIER 1: PRESENTATION LAYER
     %% =========================================================================
-    subgraph L1 ["<b>1. Presentation Layer (React + Vite Client)</b>"]
+    subgraph T1 ["<b>1. Presentation Layer (React 18 + Vite Client - Port 5173)</b>"]
         direction TB
-        UI_RepoInput["GitHub Repo URL Input<br/><i>IngestCard.jsx</i>"]
-        UI_Chat["Question Answering Interface<br/><i>ChatInterface.jsx</i>"]
-        UI_ImageUpload["<b>[NEW]</b> Optional Image Upload / Dropzone<br/><i>Architecture Diagram / Screenshot</i>"]
-        UI_Display["Multimodal Response & Diagram Viewer<br/><i>SourceViewer.jsx (Code + Visual Asset Tabs)</i>"]
+        UI_RepoInput["<b>Ingest Card</b><br/><i>IngestCard.jsx</i><br/>GitHub URL input & SSE progress bar"]
+        UI_Chat["<b>Chat Interface</b><br/><i>ChatInterface.jsx</i><br/>Question input, chat history, markdown"]
+        UI_Display["<b>Source & Asset Viewer</b><br/><i>SourceViewer.jsx</i><br/>Code snippets & interactive diagram previews"]
     end
 
     %% =========================================================================
-    %% LAYER 2: BACKEND LAYER (BFF)
+    %% TIER 2: BACKEND FOR FRONTEND (BFF)
     %% =========================================================================
-    subgraph L2 ["<b>2. Backend Layer (Node.js + Express BFF - Port 5000)</b>"]
+    subgraph T2 ["<b>2. Backend for Frontend (Node.js + Express - Port 5000)</b>"]
         direction TB
-        EXP_Router["Express Router<br/><i>server/src/routes/routes.js</i>"]
-        EXP_IngestCtrl["Ingestion Controller<br/><i>ingestController() in controller.js</i>"]
-        EXP_QueryCtrl["Query Controller & Multimodal Dispatch<br/><i>queryController() in controller.js</i>"]
-        EXP_SSE["SSE Progress Streamer<br/><i>text/event-stream relay</i>"]
+        BFF_Router["<b>Express Router</b><br/><i>routes/routes.js</i><br/>/api/ingest, /api/query, /api/chat"]
+        BFF_Ctrl["<b>API Controllers</b><br/><i>controllers/controller.js</i><br/>Request validation & SSE relay"]
+        BFF_GH["<b>GitHub Service</b><br/><i>github/downloadRepo.js</i><br/>Fetches tree, filters code & images"]
+        BFF_DB[("<b>MongoDB Database</b><br/>Stores Users, Repositories,<br/>and Chat Histories")]
     end
 
     %% =========================================================================
-    %% LAYER 3: REPOSITORY INGESTION LAYER
+    %% TIER 3: RAG MICROSERVICE
     %% =========================================================================
-    subgraph L3 ["<b>3. Repository Ingestion Layer (GitHub Integration)</b>"]
+    subgraph T3 ["<b>3. RAG Microservice (Python FastAPI - Port 8000)</b>"]
         direction TB
-        GH_Fetch["GitHub API Client<br/><i>downloadRepo.js (getRepositoryTree)</i>"]
-        GH_Router{"Asset Classifier & Filter<br/><i>isUsefulFile() router</i>"}
-        GH_CodeFiles["Source Code & Markdown Docs<br/><i>.js, .py, .go, .java, .md, .json</i>"]
-        GH_VisualAssets["<b>[NEW]</b> Visual Asset Extractor<br/><i>.png, .jpg, .jpeg, .webp, .svg</i>"]
+        API_Fast["<b>FastAPI Router</b><br/><i>app.py</i><br/>POST /ingest, POST /query"]
+        Guard["<b>Security Guardrail</b><br/><i>sensitive_guard.py</i><br/>Secret redaction & prompt protection"]
+        Rewriter["<b>Query Rewriter</b><br/><i>query_rewriter.py</i><br/>Query expansion & metadata filter extraction"]
+        Splitter["<b>Text Chunking</b><br/><i>ingest.py</i><br/>RecursiveCharacterTextSplitter (500/50)"]
+        Vision["<b>Visual Pipeline</b><br/><i>visual_pipeline.py</i><br/>Gemini Vision architectural analysis"]
+        RRF["<b>Hybrid RRF Engine</b><br/><i>retrieve.py</i><br/>Dense + Sparse rank fusion (k=60)"]
+        Gen["<b>Answer Generator</b><br/><i>generate.py</i><br/>Boundary prompt & citation builder"]
     end
 
     %% =========================================================================
-    %% LAYER 4: TEXT PROCESSING PIPELINE
+    %% STORAGE & MODELS
     %% =========================================================================
-    subgraph L4 ["<b>4. Text Processing Pipeline (FastAPI / RAG)</b>"]
+    subgraph T4 ["<b>4. AI Models & Storage Layer</b>"]
         direction TB
-        TXT_Guard["Sensitive Content Redactor<br/><i>sensitive_guard.py</i>"]
-        TXT_Splitter["Recursive Character Text Splitter<br/><i>chunk_size=500, overlap=50 (ingest.py)</i>"]
-        TXT_Embed["Text Embedding Generator<br/><i>gemini-embedding-2 (3072-dim)</i>"]
+        QDRANT[("<b>Qdrant Cloud Vector DB</b><br/>Collection: codebase_documents<br/>Vectors: 3072-dim Cosine")]
+        BM25_STORE[("<b>BM25 Index Store</b><br/>data/bm25-{repo_id}.pkl<br/>Lexical tokens (code + diagrams)")]
+        GEM_EMB["<b>Google Gemini Embeddings</b><br/>gemini-embedding-2 (3072-dim)"]
+        GEM_LLM["<b>Google Gemini LLM</b><br/>gemini-3.6-flash (Vision + Text)"]
     end
 
     %% =========================================================================
-    %% LAYER 5: VISUAL PROCESSING PIPELINE
+    %% INGESTION FLOW CONNECTIONS
     %% =========================================================================
-    subgraph L5 ["<b>5. Visual Processing Pipeline (FastAPI - Vision Extractor)</b>"]
-        direction TB
-        VIS_Detect["Visual Asset Preprocessor<br/><i>MIME detector & Base64 encoder</i>"]
-        VIS_Gemini["<b>[NEW]</b> Gemini Vision Analysis<br/><i>gemini-3.6-flash (Vision mode)</i>"]
-        VIS_Extractor["Visual Structural Synthesizer<br/><i>Extracts components, services, flows, labels</i>"]
-        VIS_SearchableDoc["Searchable Visual Representation<br/><i>Markdown Summary + Raw Image GitHub URL + Metadata</i>"]
-        VIS_Embed["Visual Description Embedder<br/><i>gemini-embedding-2 (3072-dim)</i>"]
-    end
-
-    %% =========================================================================
-    %% LAYER 6: STORAGE AND INDEXING LAYER
-    %% =========================================================================
-    subgraph L6 ["<b>6. Storage and Indexing Layer</b>"]
-        direction TB
-        QDRANT[("<b>Qdrant Cloud Vector Database</b><br/>Collection: codebase_documents<br/>Vector Size: 3072 | Cosine<br/>Payload: page_content, repo_id, path, type")]
-        BM25_STORE[("<b>Per-Repo BM25 Index Store</b><br/>data/bm25-{repo_id}.pkl<br/>Indexed: Code tokens + Visual description tokens")]
-        IMG_CACHE[("<b>Visual Asset Metadata & URL Registry</b><br/>Raw GitHub Content URLs / Base64 cache")]
-    end
+    UI_RepoInput -->|"1. Submit GitHub URL"| BFF_Router
+    BFF_Router --> BFF_Ctrl
+    BFF_Ctrl -->|"2. Fetch Tree & Blobs"| BFF_GH
+    BFF_Ctrl -->|"Store Repo Metadata"| BFF_DB
+    BFF_Ctrl -->|"3. Stream POST /ingest"| API_Fast
+    API_Fast --> Guard
+    Guard --> Splitter
+    Guard --> Vision
+    Vision -->|"Analyze Diagram"| GEM_LLM
+    Vision -->|"Embed Description"| GEM_EMB
+    Splitter -->|"Embed Chunks"| GEM_EMB
+    GEM_EMB -->|"Upsert Vectors"| QDRANT
+    Splitter & Vision -->|"Save Lexical Tokens"| BM25_STORE
+    API_Fast -.->|"SSE Progress (0-100%)"| BFF_Ctrl
+    BFF_Ctrl -.->|"SSE Progress Relay"| UI_RepoInput
 
     %% =========================================================================
-    %% LAYER 7: HYBRID RETRIEVAL LAYER
+    %% QUERY FLOW CONNECTIONS
     %% =========================================================================
-    subgraph L7 ["<b>7. Hybrid Retrieval Layer (RAG/retrieve.py)</b>"]
-        direction TB
-        RET_Guard["Sensitive Query Intent Guard<br/><i>detect_sensitive_query_intent()</i>"]
-        RET_Rewriter["Query Rewriter & Metadata Extractor<br/><i>gemini-3.6-flash (query_rewriter.py)</i>"]
-        RET_Dense["Dense Vector Search (Qdrant)<br/><i>qdrant.query_points (limit=10, repo_id filter)</i>"]
-        RET_Sparse["Sparse Keyword Search (BM25)<br/><i>search_bm25() (limit=10)</i>"]
-        RET_RRF["Reciprocal Rank Fusion (RRF)<br/><i>Score = Σ 1 / (60 + rank)</i>"]
-        RET_TopK["Top-K Context Assembler (K=8)<br/><i>Code Chunks + Diagram Descriptions</i>"]
-    end
-
-    %% =========================================================================
-    %% LAYER 8: GENERATION LAYER
-    %% =========================================================================
-    subgraph L8 ["<b>8. Generation Layer (RAG/generate.py)</b>"]
-        direction TB
-        GEN_ContextBuilder["Unified Context Constructor<br/><i>Code Context + Diagram Semantic Evidence + Image Links</i>"]
-        GEN_LLM["Google Gemini LLM<br/><i>gemini-3.6-flash (temperature=0.0)</i>"]
-        GEN_Sanitizer["Output Sanitizer & Link Resolver<br/><i>redact_sensitive_content() + image markdown citations</i>"]
-    end
+    UI_Chat -->|"1. Submit Question + repo_id"| BFF_Router
+    BFF_Router --> BFF_Ctrl
+    BFF_Ctrl -->|"2. POST /query"| API_Fast
+    API_Fast --> Guard
+    Guard --> Rewriter
+    Rewriter -->|"Query Vector"| GEM_EMB
+    GEM_EMB -->|"Dense Search (Top 10)"| QDRANT
+    Rewriter -->|"Keyword Search (Top 10)"| BM25_STORE
+    QDRANT & BM25_STORE --> RRF
+    RRF -->|"Top 8 Fused Chunks"| Gen
+    Gen -->|"Synthesize Answer"| GEM_LLM
+    GEM_LLM --> Guard
+    Guard -->|"Answer + Citations"| BFF_Ctrl
+    BFF_Ctrl -->|"Save Chat Turn"| BFF_DB
+    BFF_Ctrl -->|"Display Answer"| UI_Chat
+    BFF_Ctrl -->|"Display Sources & Images"| UI_Display
 
     %% =========================================================================
-    %% FLOW ARROWS: INGESTION WORKFLOW
+    %% STYLES
     %% =========================================================================
-    UI_RepoInput -->|"1. Submit GitHub URL"| EXP_Router
-    EXP_Router -->|"Route to ingest"| EXP_IngestCtrl
-    EXP_IngestCtrl -->|"2. Fetch Tree & Blobs"| GH_Fetch
-    GH_Fetch --> GH_Router
+    classDef clientStyle fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4;
+    classDef bffStyle fill:#181825,stroke:#f9e2af,stroke-width:2px,color:#cdd6f4;
+    classDef ragStyle fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4;
+    classDef storageStyle fill:#313244,stroke:#cba6f7,stroke-width:2px,color:#f5c2e7;
 
-    %% Text Branch
-    GH_Router -->|"Code & Docs (.js, .py, .md)"| GH_CodeFiles
-    GH_CodeFiles -->|"Raw File Contents"| TXT_Guard
-    TXT_Guard -->|"Sanitized text"| TXT_Splitter
-    TXT_Splitter -->|"Chunks (chunk_size=500)"| TXT_Embed
-    TXT_Splitter -.->|"Chunk tokens"| BM25_STORE
-    TXT_Embed -->|"3072-dim vectors (type: code)"| QDRANT
-
-    %% Visual Branch (NEW)
-    GH_Router -->|"Images (.png, .jpg, .svg, .webp)"| GH_VisualAssets
-    GH_VisualAssets -->|"Raw Image Blobs + Path"| VIS_Detect
-    VIS_Detect -->|"Base64 Image Payload"| VIS_Gemini
-    VIS_Gemini -->|"Prompt: Extract flows, boxes, labels"| VIS_Extractor
-    VIS_Extractor -->|"Structured description + raw image URL"| VIS_SearchableDoc
-    VIS_SearchableDoc -->|"Store image link & path"| IMG_CACHE
-    VIS_SearchableDoc -.->|"Description tokens"| BM25_STORE
-    VIS_SearchableDoc -->|"Pass description text"| VIS_Embed
-    VIS_Embed -->|"3072-dim vectors (type: visual_asset)"| QDRANT
-
-    %% SSE Feedback
-    EXP_IngestCtrl -.->|"SSE Stream Updates"| EXP_SSE
-    EXP_SSE -.->|"Real-time Progress (0-100%)"| UI_RepoInput
-
-    %% =========================================================================
-    %% FLOW ARROWS: QUERY & RETRIEVAL WORKFLOW
-    %% =========================================================================
-    UI_Chat -->|"1. Ask question + repo_id"| EXP_Router
-    UI_ImageUpload -.->|"Optional: Direct user diagram"| EXP_Router
-    EXP_Router -->|"Route to query"| EXP_QueryCtrl
-    EXP_QueryCtrl -->|"2. POST /query"| RET_Guard
-
-    RET_Guard -->|"Safe query validated"| RET_Rewriter
-    RET_Rewriter -->|"Query Embedding (gemini-embedding-2)"| RET_Dense
-    RET_Rewriter -->|"Rewritten keyword query"| RET_Sparse
-
-    RET_Dense <-->|"Vector similarity search"| QDRANT
-    RET_Sparse <-->|"Keyword scoring"| BM25_STORE
-
-    RET_Dense -->|"Top 10 Dense Points"| RET_RRF
-    RET_Sparse -->|"Top 10 Sparse Documents"| RET_RRF
-
-    RET_RRF -->|"Fused & Re-ranked Documents"| RET_TopK
-    RET_TopK -->|"Combined Code + Visual Evidence"| GEN_ContextBuilder
-    IMG_CACHE -.->|"Fetch original image URL by path"| GEN_ContextBuilder
-
-    GEN_ContextBuilder -->|"Grounding Context + Repo Boundary Prompt"| GEN_LLM
-    GEN_LLM -->|"Generated Explanation"| GEN_Sanitizer
-    GEN_Sanitizer -->|"JSON { answer, sources, visual_assets }"| EXP_QueryCtrl
-    EXP_QueryCtrl -->|"Response Payload"| UI_Display
-
-    %% =========================================================================
-    %% STYLING & CLASSES
-    %% =========================================================================
-    classDef clientLayer fill:#1e1e2e,stroke:#89b4fa,stroke-width:2px,color:#cdd6f4;
-    classDef bffLayer fill:#181825,stroke:#f9e2af,stroke-width:2px,color:#cdd6f4;
-    classDef repoLayer fill:#11111b,stroke:#a6e3a1,stroke-width:2px,color:#cdd6f4;
-    classDef textLayer fill:#181825,stroke:#94e2d5,stroke-width:2px,color:#cdd6f4;
-    classDef visualLayer fill:#313244,stroke:#cba6f7,stroke-width:3px,color:#f5c2e7;
-    classDef storageLayer fill:#1e1e2e,stroke:#fab387,stroke-width:2px,color:#cdd6f4;
-    classDef retrievalLayer fill:#181825,stroke:#74c7ec,stroke-width:2px,color:#cdd6f4;
-    classDef genLayer fill:#1e1e2e,stroke:#f38ba8,stroke-width:2px,color:#cdd6f4;
-
-    class UI_RepoInput,UI_Chat,UI_ImageUpload,UI_Display clientLayer;
-    class EXP_Router,EXP_IngestCtrl,EXP_QueryCtrl,EXP_SSE bffLayer;
-    class GH_Fetch,GH_Router,GH_CodeFiles,GH_VisualAssets repoLayer;
-    class TXT_Guard,TXT_Splitter,TXT_Embed textLayer;
-    class VIS_Detect,VIS_Gemini,VIS_Extractor,VIS_SearchableDoc,VIS_Embed visualLayer;
-    class QDRANT,BM25_STORE,IMG_CACHE storageLayer;
-    class RET_Guard,RET_Rewriter,RET_Dense,RET_Sparse,RET_RRF,RET_TopK retrievalLayer;
-    class GEN_ContextBuilder,GEN_LLM,GEN_Sanitizer genLayer;
+    class UI_RepoInput,UI_Chat,UI_Display clientStyle;
+    class BFF_Router,BFF_Ctrl,BFF_GH,BFF_DB bffStyle;
+    class API_Fast,Guard,Rewriter,Splitter,Vision,RRF,Gen ragStyle;
+    class QDRANT,BM25_STORE,GEM_EMB,GEM_LLM storageStyle;
 ```
 
 ---
 
-## 3. Sequence Workflows
+## 4. Deep Dive: Ingestion Lifecycle
 
-### A. Multimodal Repository Ingestion Workflow
+The ingestion lifecycle transforms a raw GitHub repository into an indexed, searchable multimodal knowledge base.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Dev as Developer
     participant UI as React UI (IngestCard)
-    participant Express as Express BFF (Server)
-    participant GH as GitHub API
+    participant Express as Express BFF
+    participant GH as GitHub REST API
     participant Fast as FastAPI Microservice
-    participant GemVision as Gemini Vision (3.6-Flash)
+    participant GemVision as Gemini 3.6 Flash (Vision)
     participant GemEmb as Gemini Embedding-2
-    participant Qdrant as Qdrant Vector DB
-    participant BM25 as BM25 File Store
+    participant Qdrant as Qdrant Cloud
+    participant BM25 as Local BM25 Store
 
-    Dev->>UI: Enters GitHub URL & clicks Ingest
-    UI->>Express: POST /api/ingest { githubUrl }
-    Express->>GH: getRepositoryTree(owner, repo, branch)
-    GH-->>Express: Complete File Tree & Commit SHA
+    Dev->>UI: Enters GitHub URL & Clicks "Ingest"
+    UI->>Express: POST /api/ingest { githubUrl, userId }
+    Express->>UI: SSE Connected (text/event-stream)
 
-    rect rgb(30, 45, 60)
+    Express->>GH: GET /repos/{owner}/{repo}/git/trees/{branch}?recursive=1
+    GH-->>Express: Complete File Tree & Latest Commit SHA
+
+    rect rgb(28, 33, 40)
         Note over Express,GH: Asset Partitioning
-        Express->>GH: Fetch Code & Docs (.js, .py, .md)
-        Express->>GH: Fetch Images (.png, .jpg, .webp, .svg) as Base64
+        Express->>GH: Fetch Code & Markdown Files (.js, .py, .md, .go, etc.)
+        Express->>GH: Fetch Visual Assets (.png, .jpg, .webp, .svg) as Base64
     end
 
-    Express->>Fast: POST /ingest { files: [code + visualAssets], repo_id, commit_hash }
-    Fast->>UI: SSE Event: status ("Splitting text & analyzing visual assets...")
+    Express->>Fast: POST /ingest { files, visual_files, repo_id, commit_hash }
+    Fast-->>Express: SSE status: "Processing multimodal content..."
 
-    par Visual Pipeline
-        Fast->>GemVision: Analyze image base64 + technical prompt
-        GemVision-->>Fast: Structured diagram description (components, arrows, flows)
-        Fast->>GemEmb: Embed visual description (3072-dim)
-        GemEmb-->>Fast: Visual vector
-    and Code Pipeline
-        Fast->>Fast: Split code into 500-char chunks (overlap=50)
-        Fast->>GemEmb: embed_batch(chunks)
-        GemEmb-->>Fast: Code vectors
+    par Visual Asset Pipeline
+        Fast->>GemVision: Analyze Image Base64 with Systems Architect Prompt
+        GemVision-->>Fast: Structured Architectural Markdown (Services, Flows, Labels)
+        Fast->>GemEmb: Embed Visual Description (3072-dim)
+        GemEmb-->>Fast: Visual Vector
+    and Source Code Pipeline
+        Fast->>Fast: Text Splitter: 500-char chunks (overlap=50)
+        Fast->>GemEmb: Embed Code Chunks in Batches (3072-dim)
+        GemEmb-->>Fast: Code Vectors
     end
 
-    Fast->>BM25: Build & save BM25 index (code chunks + visual descriptions)
-    Fast->>Qdrant: Upsert code points & visual asset points (with metadata.type)
-    Fast-->>Express: SSE Event: complete { repository, chunks, files }
+    Fast->>BM25: Build & Save BM25 Index (Code Tokens + Diagram Tokens)
+    Fast->>Qdrant: Upsert Points (Vectors + repo_id + path + raw_url metadata)
+
+    Fast-->>Express: SSE complete: { repository, filesCount, chunksCount }
+    Express->>Express: Persist Repository Metadata in MongoDB
     Express-->>UI: SSE Complete Event
-    UI-->>Dev: Ingestion Complete Notification & Repo Stats Updated
+    UI-->>Dev: Ingestion Complete! Repository Ready for Querying
 ```
+
+### Detailed Ingestion Steps
+
+#### 1. Repository Traversal & Filtering (`server/src/github/downloadRepo.js`)
+- Uses GitHub's Git Data Trees API to retrieve the repository hierarchy in a single API call.
+- Applies **intelligent exclusion rules** to avoid indexing bloat:
+  - Excludes `node_modules/`, `vendor/`, `dist/`, `build/`, `.git/`, lockfiles (`package-lock.json`, `yarn.lock`), and binary executables.
+- Classifies discovered files into two categories:
+  1. **Source Code & Documentation:** `.js`, `.jsx`, `.ts`, `.tsx`, `.py`, `.java`, `.go`, `.rs`, `.cpp`, `.c`, `.cs`, `.php`, `.md`, `.json`, `.yml`, `.yaml`, `.sql`, `Dockerfile`.
+  2. **Visual Assets:** `.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`.
+
+#### 2. Visual Pipeline: Architecture Understanding (`RAG/visual_pipeline.py`)
+Architecture diagrams cannot be understood by naive text splitters. For each visual asset:
+- The base64-encoded image is sent to **Gemini 3.6 Flash** with a specialized prompt requiring:
+  1. **Summary:** High-level architectural role.
+  2. **Asset Type:** Architecture Diagram, Flowchart, Sequence Diagram, Database ERD, UI Screenshot, or Other.
+  3. **Identified Components & Services:** Microservices, gateways, databases, queues (Kafka, RabbitMQ), caches (Redis), third-party services.
+  4. **Data Flows & Protocols:** Communication arrows, HTTP/REST, gRPC, WebSocket, GraphQL, AMQP, SQL relationships.
+  5. **Technical Labels & Annotations:** Exact port numbers, environment variables, class names, table names.
+- The resulting structured description is combined with the asset's GitHub raw URL:
+  $$\text{rawUrl} = \text{https://raw.githubusercontent.com/\{owner\}/\{repo\}/\{branch\}/\{filePath\}}$$
+- This description is embedded into a 3072-dimensional vector via `gemini-embedding-2`, making the diagram searchable alongside code.
+
+#### 3. Text Chunking & Embedding (`RAG/ingest.py`)
+- Source code files are split using `RecursiveCharacterTextSplitter`:
+  - `chunk_size = 500` characters.
+  - `chunk_overlap = 50` characters.
+- Embeddings are generated in parallel batches using `gemini-embedding-2` (3072 dimensions).
+
+#### 4. Dual Indexing
+- **Dense Vectors:** Upserted into Qdrant Cloud under collection `codebase_documents`. Every point contains:
+  ```json
+  {
+    "id": "uuid",
+    "vector": [0.012, -0.045, ...],
+    "payload": {
+      "page_content": "chunk text or visual description",
+      "metadata": {
+        "repo_id": "owner/repo",
+        "path": "src/controllers/orderController.js",
+        "source": "src/controllers/orderController.js",
+        "commit_hash": "a1b2c3d...",
+        "type": "code",
+        "chunkId": "owner/repo_src/controllers/orderController.js_0"
+      }
+    }
+  }
+  ```
+  *(For visual assets, `"type": "visual_asset"` and `"raw_url": "https://raw.githubusercontent.com/..."` are included).*
+- **Sparse BM25 Index:** Tokenized words from both code chunks and visual descriptions are saved to a repository-specific serialized index at `RAG/data/bm25-{sanitized_repo_id}.pkl`.
 
 ---
 
-### B. Multimodal Question-Answering Workflow
+## 5. Deep Dive: Query & Hybrid Retrieval Lifecycle
+
+When a developer submits a query, Codebase Copilot executes a multi-stage retrieval pipeline before generating an answer.
 
 ```mermaid
 sequenceDiagram
     autonumber
     actor Dev as Developer
     participant UI as React UI (ChatInterface)
-    participant Express as Express BFF (Server)
-    participant Fast as FastAPI (/query)
-    participant Rewriter as Query Rewriter (Gemini 3.6-Flash)
-    participant Qdrant as Qdrant Vector DB
-    participant BM25 as BM25 Index (Pickle)
-    participant GeminiGen as Gemini LLM (3.6-Flash)
+    participant Express as Express BFF
+    participant Fast as FastAPI Microservice
+    participant Guard as Security Guardrail
+    participant Rewriter as Query Rewriter (Gemini 3.6 Flash)
+    participant GemEmb as Gemini Embedding-2
+    participant Qdrant as Qdrant Cloud (Dense)
+    participant BM25 as BM25 Store (Sparse)
+    participant Gen as Gemini 3.6 Flash (Generator)
 
-    Dev->>UI: "Explain how an order is processed using the architecture diagram."
+    Dev->>UI: "How does the checkout service communicate with payment?"
     UI->>Express: POST /api/query { question, repo_id }
     Express->>Fast: POST /query { question, repo_id }
 
-    Fast->>Fast: detect_sensitive_query_intent(question) -> Safe
-    Fast->>Rewriter: rewrite_query(question)
-    Rewriter-->>Fast: "order processing flow OrderService PaymentService architecture diagram"
-
-    par Hybrid Retrieval
-        Fast->>Fast: client.models.embed_content(rewritten_query) -> 3072-dim vector
-        Fast->>Qdrant: query_points(vector, filter={repo_id}, limit=10)
-        Qdrant-->>Fast: Top 10 Dense Points (Includes code chunks & diagram description)
-    and Sparse Retrieval
-        Fast->>BM25: search_bm25(bm25_index, rewritten_query, limit=10)
-        BM25-->>Fast: Top 10 Sparse Chunks (Keyword matching)
+    Fast->>Guard: detect_sensitive_query_intent(question)
+    alt Sensitive Query (Asking for API keys, passwords, DB credentials)
+        Guard-->>Fast: Blocked: Security Policy Violation
+        Fast-->>Express: Refusal Message
+        Express-->>UI: Displays Safe Refusal
+    else Safe Query
+        Guard-->>Fast: Query Approved
     end
 
-    Fast->>Fast: reciprocal_rank_fusion(dense, sparse) [RRF_K=60]
-    Note over Fast: Top-8 fused documents include:<br/>1. docs/architecture.png description<br/>2. src/controllers/orderController.js<br/>3. src/services/paymentService.js
+    Fast->>Rewriter: rewrite_query(question) & extract_metadata(question)
+    Rewriter-->>Fast: Rewritten query & metadata filters (e.g., language, path)
 
-    Fast->>GeminiGen: generate_answer(combined_context, question, repo_id)
-    GeminiGen-->>Fast: Grounded answer synthesizing code + diagram interactions
-    Fast-->>Express: JSON { answer, sources: [code files + visual assets] }
-    Express-->>UI: Response payload
-    UI-->>Dev: Renders explanation + interactive diagram preview + code sources
+    par Dense Vector Search
+        Fast->>GemEmb: Embed Rewritten Query (3072-dim)
+        GemEmb-->>Fast: Query Vector
+        Fast->>Qdrant: query_points(vector, filter={repo_id}, limit=10)
+        Qdrant-->>Fast: Top 10 Dense Points (Code + Diagrams)
+    and Sparse Lexical Search
+        Fast->>BM25: search_bm25(bm25_index, rewritten_query, limit=10)
+        BM25-->>Fast: Top 10 Sparse Documents (Exact keyword matches)
+    end
+
+    Fast->>Fast: Reciprocal Rank Fusion (RRF, k=60)
+    Note over Fast: Merge & re-rank dense + sparse results.<br/>Select top 8 chunks (code snippets + diagram descriptions).
+
+    Fast->>Gen: generate_answer(question, top_8_documents, repo_id)
+    Gen->>Guard: redact_sensitive_content(answer)
+    Guard-->>Fast: Cleaned answer with source citations & image links
+    Fast-->>Express: JSON { answer, sources }
+    Express->>Express: Persist Question & Answer in MongoDB
+    Express-->>UI: Return Answer Payload
+    UI-->>Dev: Displays Answer with Code Citations & Diagram Previews
+```
+
+### Detailed Retrieval Steps
+
+#### 1. Security Intent Guard (`RAG/sensitive_guard.py`)
+Before executing any retrieval, the query is inspected for credential-harvesting intent:
+- Scans for patterns requesting passwords, private keys, database connection strings, `.env` file dumps, or API tokens.
+- If detected, retrieval is immediately bypassed, and a secure refusal message is returned.
+
+#### 2. Query Rewriting & Metadata Extraction (`RAG/query_rewriter.py`, `RAG/retrieve.py`)
+Natural language developer queries are often brief or ambiguous:
+- **Rewriting:** `gemini-3.6-flash` expands the query into domain-specific terms (e.g., *"How do orders process?"* $\rightarrow$ *"order processing checkout workflow PaymentService Kafka event orderController"*).
+- **Metadata Extraction:** If the query mentions specific file extensions (`.py`, `.ts`), directory paths (`server/src/`), or languages, metadata filters are constructed to narrow the search scope.
+
+#### 3. Dual Search Execution
+- **Dense Search (Qdrant):** Retrieves the top 10 vector matches strictly matching `metadata.repo_id`.
+- **Sparse Search (BM25):** Evaluates keyword frequency against the repository's BM25 index and retrieves the top 10 matches.
+
+#### 4. Reciprocal Rank Fusion (RRF)
+To combine dense and sparse results without score calibration discrepancies, Codebase Copilot applies **Reciprocal Rank Fusion**:
+
+$$\text{RRF Score}(d) = \sum_{m \in \{\text{dense}, \text{sparse}\}} \frac{1}{k + \text{rank}_m(d)}$$
+
+Where:
+- $k = 60$ (standard smoothing constant).
+- $\text{rank}_m(d)$ is the 1-based rank of document $d$ in search system $m$.
+- Documents appearing in both dense and sparse lists receive a combined score boost.
+- The **top 8 fused documents** are passed to the generation stage.
+
+---
+
+## 6. Deep Dive: Generation & Response Synthesis
+
+### Context Construction (`RAG/generate.py`)
+The top 8 retrieved documents are formatted into a unified prompt context. Items are labeled according to their type:
+
+```markdown
+--- Architecture Diagram / Visual Asset: docs/architecture.png (Image URL: https://raw.githubusercontent.com/...) ---
+### Summary:
+E-commerce payment processing architecture showing microservices and queue routing.
+### Identified Components:
+CheckoutService, PaymentGateway, StripeClient, Kafka order-events topic.
+### Data Flows:
+CheckoutService sends POST /pay -> PaymentGateway -> publishes to Kafka.
+
+--- Source Code File: src/controllers/checkoutController.js ---
+export async function processCheckout(req, res) {
+    const { orderId, amount } = req.body;
+    await kafkaProducer.send({ topic: 'order-events', message: { orderId, amount } });
+}
+```
+
+### Prompt Guardrails & Repo Boundary
+The prompt passed to `gemini-3.6-flash` enforces three strict constraints:
+1. **Repository Boundary:** The model must answer using *only* the provided context for the specific `repo_id`. If the answer is not in the context, it must clearly acknowledge that.
+2. **Security & Redaction:** Explicitly forbids printing detected secrets, database connection URIs, or private tokens.
+3. **Multimodal Citation:** When visual evidence is used, the response references the diagram name and its raw GitHub image URL so the frontend can render an interactive preview.
+
+---
+
+## 7. Database & Storage Schemas
+
+### 1. Qdrant Cloud Vector Schema
+- **Collection Name:** `codebase_documents`
+- **Vector Dimension:** 3072 (`gemini-embedding-2`)
+- **Distance Metric:** Cosine
+- **Payload Schema:**
+  ```json
+  {
+    "page_content": "string (code chunk text or visual markdown analysis)",
+    "metadata": {
+      "repo_id": "string (e.g. 'owner/repo')",
+      "path": "string (e.g. 'server/src/index.js' or 'docs/arch.png')",
+      "source": "string (file path reference)",
+      "commit_hash": "string (git commit SHA)",
+      "type": "string ('code' | 'visual_asset')",
+      "raw_url": "string (optional: raw GitHub asset URL)",
+      "language": "string (optional: programming language)",
+      "chunkId": "string (deterministic chunk identifier)"
+    }
+  }
+  ```
+
+### 2. MongoDB Schema (BFF Server)
+
+```mermaid
+erDiagram
+    USERS ||--o{ REPOSITORIES : owns
+    USERS ||--o{ CHAT_MESSAGES : sends
+    REPOSITORIES ||--o{ CHAT_MESSAGES : contains
+
+    USERS {
+        string _id PK
+        string email
+        string name
+        string avatar
+        boolean isDemo
+        date createdAt
+    }
+
+    REPOSITORIES {
+        string _id PK
+        string repoId "owner/repo"
+        string name
+        string owner
+        string defaultBranch
+        string commitHash
+        int filesCount
+        int visualAssetsCount
+        int chunksCount
+        string userId FK
+        boolean isDemo
+        date createdAt
+    }
+
+    CHAT_MESSAGES {
+        string _id PK
+        string repoId
+        string userId FK
+        string question
+        string answer
+        array sources
+        array visualAssets
+        date createdAt
+    }
 ```
 
 ---
 
-## 4. Layer-by-Layer Architectural Details
+## 8. End-to-End Real-World Scenario Walkthrough
 
-### 1. Presentation Layer (`client/`)
-- **Framework:** React 18 with Vite.
-- **Components:**
-  - `IngestCard.jsx`: Submits GitHub repository URLs, listens to SSE updates for chunking, embedding, and visual processing phases.
-  - `ChatInterface.jsx`: Chat history, streaming state, quick suggestions. Extended with a file upload button allowing developers to drag and drop arbitrary architecture diagrams/screenshots.
-  - `SourceViewer.jsx`: Extended to display a tabbed list of referenced code files and visual assets. For visual assets, renders an interactive thumbnail preview referencing GitHub's raw content URL (`https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{path}`).
+### Scenario
+A developer ingests `e-commerce-platform` and asks:
+> *"Explain how an order is placed and routed to payment using the architecture diagram."*
 
-### 2. Backend Layer / BFF (`server/`)
-- **Runtime:** Node.js with Express (Port 5000).
-- **Controllers & Routing:**
-  - `server/src/routes/routes.js`: Maps client endpoints (`/api/ingest`, `/api/query`, `/api/repositories`).
-  - `server/src/controllers/controller.js`:
-    - `ingestController()`: Orchestrates GitHub API fetching, coordinates SSE progress relay to frontend, and dispatches data to FastAPI.
-    - `queryController()`: Proxies queries and optional user diagram attachments to FastAPI.
-
-### 3. Repository Ingestion Layer (`server/src/github/`)
-- **Module:** `downloadRepo.js`.
-- **Logic:**
-  - Calls `https://api.github.com/repos/{owner}/{repo}/git/trees/{branch}?recursive=1`.
-  - Extends `isUsefulFile()` to recognize visual extensions: `.png`, `.jpg`, `.jpeg`, `.webp`, `.svg`.
-  - Fetches visual assets as Base64 payloads and assigns them the deterministic raw URL:
-    $$\text{rawUrl} = \text{`https://raw.githubusercontent.com/\$\{owner\}/\$\{repo\}/\$\{branch\}/\$\{filePath\}`}$$
-
-### 4. Text Processing Pipeline (`RAG/ingest.py`)
-- **Language Aware Splitting:** Uses LangChain's `RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)`.
-- **Embedding:** `gemini-embedding-2` producing 3072-dimensional vectors.
-- **Batch Processing:** Multi-threaded batching using `concurrent.futures.ThreadPoolExecutor(max_workers=5)` with exponential retry handling.
-
-### 5. Visual Processing Pipeline (`RAG/visual_pipeline.py`)
-- **Vision Model:** Google Gemini `gemini-3.6-flash` in vision mode.
-- **Prompt Specification:** Instructs Gemini to extract:
-  1. Identified services, databases, queues, clients, and interfaces.
-  2. Directional arrows, request/response protocols (HTTP, gRPC, WebSocket, Kafka).
-  3. All diagram text labels, ports, parameters, and notes.
-- **Representation:** Synthesizes a structured markdown document containing the semantic description, file path, and raw GitHub image URL.
-- **Vectorization:** The generated description is embedded via `gemini-embedding-2` (3072 dimensions), rendering it completely interoperable with text code vectors.
-
-### 6. Storage and Indexing Layer
-- **Qdrant Vector Database:**
-  - Collection: `codebase_documents`.
-  - Vector Size: 3072, Distance Metric: Cosine.
-  - Multi-tenancy & Isolation: Point payloads include `metadata.repo_id`, `metadata.path`, `metadata.source`, `metadata.commit_hash`, and `metadata.type` (`"code"` or `"visual_asset"`).
-  - Filter Indexes: Created on `metadata.repo_id` to guarantee zero cross-repository leakage.
-- **BM25 File Store:**
-  - Serialized index files: `RAG/data/bm25-{sanitized_repo_id}.pkl`.
-  - Indexes both code tokens and visual description tokens (e.g., service names, queue topics, protocol labels).
-
-### 7. Hybrid Retrieval Layer (`RAG/retrieve.py`)
-- **Query Optimization:**
-  - `sensitive_guard.py`: Detects and blocks malicious queries seeking credentials, keys, or tokens.
-  - `query_rewriter.py`: Uses `gemini-3.6-flash` to expand queries into technical concepts.
-  - `extract_metadata()`: Extracts explicit file/path/language constraints from user queries.
-- **Retrieval & Fusion:**
-  - Dense Search: Qdrant `query_points(limit=10)` filtered by `repo_id`.
-  - Sparse Search: BM25 `search_bm25(limit=10)`.
-  - Reciprocal Rank Fusion:
-    $$\text{RRF Score}(d) = \sum_{m \in \{\text{dense}, \text{sparse}\}} \frac{1}{60 + \text{rank}_m(d)}$$
-  - Cutoff: Returns top $K=8$ combined documents.
-
-### 8. Generation Layer (`RAG/generate.py`)
-- **Unified Context Construction:** Combines retrieved code blocks and visual diagram descriptions into a structured prompt with strict boundary enforcement.
-- **LLM:** `gemini-3.6-flash` running at `temperature=0.0`.
-- **Output:** Validated and sanitized JSON `{ "answer": string, "sources": [...] }` containing code file paths and visual asset preview references.
+```
+                              USER QUERY
+          "Explain how an order is placed and routed to payment
+                       using the architecture diagram"
+                                  │
+                                  ▼
+                        SECURITY & REWRITING
+           Safe Query Validated -> Expanded Query:
+   "order placement checkout flow payment service kafka event docs/arch.png"
+                                  │
+                 ┌────────────────┴────────────────┐
+                 ▼                                 ▼
+      Dense Vector Search (Qdrant)       Sparse Keyword Search (BM25)
+   - Matches: Embedding of order flow - Matches: "order", "payment", "diagram"
+   - Top Hit: docs/architecture.png   - Top Hit: docs/architecture.png
+   - Hit: services/paymentService.js  - Hit: controllers/orderController.js
+                 └────────────────┬────────────────┘
+                                  │
+                                  ▼
+                     RECIPROCAL RANK FUSION (RRF)
+                 ┌─────────────────────────────────┐
+                 │ Rank 1: docs/architecture.png   │
+                 │ Rank 2: controllers/order.js    │
+                 │ Rank 3: services/payment.js     │
+                 │ Rank 4: events/orderEvent.js    │
+                 └────────────────┬────────────────┘
+                                  │
+                                  ▼
+                     UNIFIED CONTEXT TO GEMINI
+        [Visual Analysis: docs/architecture.png]
+      + [Code Implementation: controllers/order.js]
+      + [Service Implementation: services/payment.js]
+                                  │
+                                  ▼
+                        GENERATED EXPLANATION
+   1. Explains the high-level flow based on the architecture diagram:
+      Client -> API Gateway -> Order Service -> Kafka -> Payment Service.
+   2. Validates implementation details with exact code lines and function names:
+      `createOrder()` in order.js and `handlePaymentEvent()` in payment.js.
+   3. Frontend displays the markdown answer alongside an interactive preview
+      of docs/architecture.png and expandable source code badges.
+```
 
 ---
 
-## 5. Architectural Comparison: Existing vs. Proposed Multimodal RAG
+## 9. Key Architectural Trade-Offs & Decisions ("The Why")
 
-| Component / Layer | Existing Architecture | Multimodal Architecture Extension |
-|---|---|---|
-| **React Frontend** | Text-only query input; shows text markdown and code source badges in `SourceViewer.jsx`. | Adds visual asset viewer (inline diagram previews with zoom/pan modals); adds optional diagram image upload dropzone in `ChatInterface.jsx`. |
-| **Node.js Express BFF** | Filters out `.png`, `.jpg`, `.jpeg`, `.svg` in `downloadRepo.js`. Forwards only code text to FastAPI. | Detects visual assets; downloads images as base64 blobs; attaches raw GitHub content URLs; routes visual assets to FastAPI ingestion. |
-| **FastAPI Microservice** | `ingest.py` only accepts text documents and chunks them with `RecursiveCharacterTextSplitter`. | Introduces `visual_pipeline.py`; handles image inputs, invokes Gemini Vision for diagram understanding, creates searchable visual representations. |
-| **Google Gemini Integration** | `gemini-3.6-flash` for query rewriting, metadata extraction, and text answer generation; `gemini-embedding-2` (3072-dim) for text chunks. | `gemini-3.6-flash` also acts as Vision Extractor during ingestion (analyzing UML, flowcharts, architectures); `gemini-embedding-2` embeds extracted visual descriptions into 3072-dim vectors. |
-| **Qdrant Vector Database** | Single collection `codebase_documents` containing vector size 3072 of code/doc chunks. | Same collection `codebase_documents` (size 3072); stores both code and visual description vectors. Visual points include `metadata.type = "visual_asset"` and `metadata.raw_url`. |
-| **BM25 Keyword Search** | Indexes only tokenized source code and documentation chunks in `data/bm25-{repo_id}.pkl`. | Indexes code chunks **and** tokenized visual description text (service names, arrow labels, queue names), allowing direct keyword matching against diagrams. |
-| **Hybrid Retrieval & RRF** | RRF ($k=60$) merges dense and sparse results over code text. | RRF ($k=60$) seamlessly ranks both code chunks and visual descriptions into a single top-K list ($K=8$) without needing separate retrieval silos. |
-| **Answer Generation** | Injects only text code snippets into prompt context in `generate.py`. | Injects unified context containing code snippets and diagram structural descriptions, enabling Gemini to correlate code implementations with architectural diagrams. |
+### 1. Why convert diagrams to text descriptions rather than using raw image embeddings?
+- **Text & Structure Density:** Software diagrams contain dense textual labels (function names, port numbers, microservice names, and protocol acronyms). Standard multimodal vision-embedding models (e.g., CLIP) compress images into low-dimensional visual representations where fine-grained text and directional arrow relationships are lost.
+- **Unified Retrieval:** By using **Gemini 3.6 Flash** to transcribe diagrams into structured technical markdown, the diagram descriptions can be embedded using the same `gemini-embedding-2` model as the source code. This allows dense vector search and BM25 lexical search to query code and diagrams simultaneously.
+
+### 2. Why use Hybrid Search (BM25 + Qdrant) instead of vector search alone?
+- Vector search alone can struggle with exact identifiers (e.g., a specific variable name like `AUTH_JWT_SECRET_KEY` or a UUID). BM25 guarantees that exact keyword matches rank highly.
+- Conversely, BM25 fails when queries use synonyms or conceptual phrasing. Hybrid search with **Reciprocal Rank Fusion** delivers the best of both worlds.
+
+### 3. Why a separate Node.js BFF and Python FastAPI service?
+- **Node.js BFF:** Ideal for handling I/O-heavy workloads, GitHub API pagination, SSE streaming to the frontend, Google OAuth authentication, and MongoDB session tracking.
+- **Python FastAPI:** The standard ecosystem for AI and data processing. It provides seamless access to scientific libraries, tokenizers, text splitters, and native AI SDKs.
+
+### 4. Why serialize BM25 indexes per repository on disk?
+- Codebase Copilot supports multi-repository ingestion. In-memory monolithic BM25 indexes for thousands of repositories consume excessive RAM.
+- Storing per-repository BM25 pickle files (`data/bm25-{repo_id}.pkl`) allows on-demand loading during queries, guarantees zero cross-repo keyword leakage, and enables straightforward index invalidation or deletion.
 
 ---
 
-## 6. End-to-End Real-World Scenario Walkthrough
+## 10. Codebase File & Directory Reference Guide
 
-### Question: *"Explain how an order is processed using the architecture diagram."*
-
-```
-                             USER QUERY
-         "Explain how an order is processed using the architecture diagram"
-                                 │
-                 ┌───────────────┴───────────────┐
-                 ▼                               ▼
-      BM25 Sparse Retrieval           Qdrant Dense Retrieval
-   - Matches: "order", "diagram"   - Matches: embedding of order flow
-   - Top hit: docs/arch.png (desc) - Top hit: docs/arch.png (vector)
-   - Hit: orderController.js       - Hit: paymentService.js
-                 └───────────────┬───────────────┘
-                                 │
-                                 ▼
-                     Reciprocal Rank Fusion (RRF)
-                 ┌───────────────────────────────┐
-                 │ Rank 1: docs/arch.png (Desc)  │
-                 │ Rank 2: orderController.js    │
-                 │ Rank 3: paymentService.js     │
-                 │ Rank 4: events/orderEvent.js  │
-                 └───────────────┬───────────────┘
-                                 │
-                                 ▼
-                    Combined Context to Gemini
-        [Visual Evidence: docs/arch.png] + [Code Files: orderController.js]
-                                 │
-                                 ▼
-                          Final Response
-   1. Explains flow according to diagram (Client -> Gateway -> Order Service -> Kafka -> Payment).
-   2. Verifies implementation details with exact code lines and function names.
-   3. Displays interactive preview of docs/arch.png alongside referenced source code.
-```
-
-### Trace:
-1. **User Query:** Developer asks *"Explain how an order is processed using the architecture diagram"* for repository `my-org/ecommerce-core`.
-2. **Rewriting:** Gemini expands query to *"order processing lifecycle architecture diagram OrderService PaymentService Kafka event flow"*.
-3. **Retrieval:**
-   - Qdrant finds high semantic similarity with the vector of `docs/architecture.png` (which was described by Gemini Vision as showing client $\rightarrow$ gateway $\rightarrow$ order service $\rightarrow$ Kafka).
-   - BM25 matches keywords `"order"`, `"architecture"`, and `"diagram"` across the tokenized visual description and `orderController.js`.
-4. **Fusion:** RRF fuses both lists; the top 8 context items contain both `docs/architecture.png` and primary implementation code files (`orderController.js`, `paymentService.js`).
-5. **Generation:** `gemini-3.6-flash` correlates the visual components from the diagram with the actual implementation functions, citing both the diagram image and the relevant source files.
-6. **Display:** The React UI renders the grounded markdown answer and displays an interactive preview of `docs/architecture.png` alongside referenced code sources.
+| Component | File Path | Primary Responsibility |
+| :--- | :--- | :--- |
+| **Frontend UI** | [App.jsx](file:///d:/codebase_copilot/client/src/App.jsx) | Main React container; handles user authentication state, active repository selection, and theme management. |
+| | [IngestCard.jsx](file:///d:/codebase_copilot/client/src/components/IngestCard.jsx) | URL submission form with SSE progress bar and live status telemetry. |
+| | [ChatInterface.jsx](file:///d:/codebase_copilot/client/src/components/ChatInterface.jsx) | Chat message history, query input, markdown rendering, and diagram preview modal. |
+| | [SourceViewer.jsx](file:///d:/codebase_copilot/client/src/components/SourceViewer.jsx) | Tabbed viewer for referenced source code snippets and visual asset thumbnails. |
+| | [RepoStats.jsx](file:///d:/codebase_copilot/client/src/components/RepoStats.jsx) | Repository selector and index telemetry (files count, chunks count). |
+| **BFF Server** | [index.js](file:///d:/codebase_copilot/server/src/index.js) | Express entry point, CORS configuration, MongoDB connection setup. |
+| | [routes.js](file:///d:/codebase_copilot/server/src/routes/routes.js) | Route declarations for `/api/ingest`, `/api/query`, `/api/chat`, and auth. |
+| | [controller.js](file:///d:/codebase_copilot/server/src/controllers/controller.js) | Request orchestration, SSE event streaming to client, MongoDB persistence. |
+| | [downloadRepo.js](file:///d:/codebase_copilot/server/src/github/downloadRepo.js) | GitHub API client; fetches trees, filters code files, downloads images as base64. |
+| **RAG Microservice** | [app.py](file:///d:/codebase_copilot/RAG/app.py) | FastAPI application exposing `/ingest`, `/query`, and `/repositories`. |
+| | [ingest.py](file:///d:/codebase_copilot/RAG/ingest.py) | Text splitting, Gemini embeddings, Qdrant batch upserts, BM25 serialization. |
+| | [visual_pipeline.py](file:///d:/codebase_copilot/RAG/visual_pipeline.py) | Gemini Vision analyzer; turns architecture diagrams into structured markdown. |
+| | [retrieve.py](file:///d:/codebase_copilot/RAG/retrieve.py) | Hybrid retrieval orchestrator (Qdrant dense + BM25 sparse + Reciprocal Rank Fusion). |
+| | [query_rewriter.py](file:///d:/codebase_copilot/RAG/query_rewriter.py) | Query expansion and keyword optimization via Gemini 3.6 Flash. |
+| | [generate.py](file:///d:/codebase_copilot/RAG/generate.py) | Context compilation, repo boundary enforcement, answer generation via Gemini. |
+| | [sensitive_guard.py](file:///d:/codebase_copilot/RAG/sensitive_guard.py) | Query intent scanner and secret redaction guardrail. |
+| | [bm25.py](file:///d:/codebase_copilot/RAG/bm25.py) | BM25Okapi indexing, serialization, and keyword scoring. |

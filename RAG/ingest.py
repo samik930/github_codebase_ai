@@ -2,6 +2,7 @@ import os
 import re
 import time
 import uuid
+import concurrent.futures
 from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from google import genai
@@ -28,9 +29,28 @@ def sanitize_repo_id(repo_id: str) -> str:
     return re.sub(r'[^\w\-.]', '__', repo_id)
 
 
-def get_bm25_path(repo_id: str) -> str:
-    """Return the BM25 index path for a specific repository."""
-    return os.path.join(BM25_DIR, f"bm25-{sanitize_repo_id(repo_id)}.pkl")
+def sanitize_user_id(user_id: str) -> str:
+    """Convert user identifier into a safe filename component."""
+    return re.sub(r'[^\w\-.]', '__', user_id or "default_user")
+
+
+def get_bm25_path(repo_id: str, user_id: str = "default_user") -> str:
+    """Return the isolated BM25 index path for a specific user and repository."""
+    os.makedirs(BM25_DIR, exist_ok=True)
+    user_sanitized = sanitize_user_id(user_id)
+    repo_sanitized = sanitize_repo_id(repo_id)
+    
+    # Check if user-scoped file exists
+    user_scoped_path = os.path.join(BM25_DIR, f"bm25-{user_sanitized}__{repo_sanitized}.pkl")
+    if os.path.exists(user_scoped_path):
+        return user_scoped_path
+        
+    # Check legacy repo-only path for backwards compatibility
+    legacy_path = os.path.join(BM25_DIR, f"bm25-{repo_sanitized}.pkl")
+    if os.path.exists(legacy_path):
+        return legacy_path
+        
+    return user_scoped_path
 
 
 def get_language(path):
@@ -50,8 +70,6 @@ def get_language(path):
     }.get(os.path.splitext(path)[1].lower(), "text")
 
 
-import concurrent.futures
-
 def embed_single(text):
     for attempt in range(10):
         try:
@@ -68,27 +86,34 @@ def embed_single(text):
             print(f"Rate limit. Retry {attempt + 1}/10...")
             time.sleep(20)
 
+
 def embed_batch(texts):
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
         return list(executor.map(embed_single, texts))
 
 
-def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: list = None):
-    yield {"type": "status", "message": f"Starting ingestion for repository: {repo_id}"}
+def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: list = None, user_id: str = "default_user", branch: str = "main"):
+    yield {"type": "status", "message": f"Starting ingestion for repository: {repo_id} (user: {user_id})"}
 
     visual_files = visual_files or []
-    print(f"\n[INGEST] === Starting ingestion for repo_id: {repo_id}, commit_hash: {commit_hash} ===")
+    print(f"\n[INGEST] === Starting ingestion for repo_id: {repo_id}, user_id: {user_id}, commit_hash: {commit_hash} ===")
     print(f"[INGEST] Code files: {len(files)}, Visual assets: {len(visual_files)}")
 
-    # 1. Documents
+    # 1. Documents with strict multi-tenant isolation metadata
     documents = [
         {
             "page_content": redact_sensitive_content(f.get("content", "")),
             "metadata": {
                 "source": f.get("path", ""),
                 "path": f.get("path", ""),
+                "filePath": f.get("path", ""),
                 "language": get_language(f.get("path", "")),
                 "repo_id": repo_id,
+                "repoId": repo_id,
+                "userId": user_id,
+                "user_id": user_id,
+                "branch": branch,
+                "commitSHA": commit_hash,
                 "commit_hash": commit_hash,
                 "type": "code"
             }
@@ -121,7 +146,14 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
                 vis_result = analyze_visual_asset(v_file, repo_id=repo_id)
                 if vis_result:
                     vis_result["metadata"]["chunkId"] = current_chunk_id
+                    vis_result["metadata"]["commitSHA"] = commit_hash
                     vis_result["metadata"]["commit_hash"] = commit_hash
+                    vis_result["metadata"]["userId"] = user_id
+                    vis_result["metadata"]["user_id"] = user_id
+                    vis_result["metadata"]["repoId"] = repo_id
+                    vis_result["metadata"]["repo_id"] = repo_id
+                    vis_result["metadata"]["branch"] = branch
+                    vis_result["metadata"]["filePath"] = v_file.get("path", "")
                     current_chunk_id += 1
                     doc = Document(
                         page_content=vis_result["page_content"],
@@ -140,15 +172,17 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
     }
     print(f"[INGEST] Created {len(all_chunks)} total chunks ({len(chunks)} code, {len(visual_docs)} visual) for {repo_id}")
 
-    # 4. BM25 — per-repo index (indexes both code and visual descriptions)
-    bm25_path = get_bm25_path(repo_id)
+    # 4. BM25 — user and repo isolated index
+    user_sanitized = sanitize_user_id(user_id)
+    repo_sanitized = sanitize_repo_id(repo_id)
+    bm25_path = os.path.join(BM25_DIR, f"bm25-{user_sanitized}__{repo_sanitized}.pkl")
     save_bm25_index(
         create_bm25_index(all_chunks),
         bm25_path
     )
-    print(f"[INGEST] Saved BM25 index to {bm25_path}")
+    print(f"[INGEST] Saved isolated BM25 index to {bm25_path}")
 
-    # 5. Qdrant — create collection only if it doesn't exist, then delete only this repo's points
+    # 5. Qdrant — collection setup with payload indexes
     qdrant = QdrantClient(
         url=os.getenv("QDRANT_URL"),
         api_key=os.getenv("QDRANT_API_KEY"),
@@ -160,7 +194,6 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
             existing_collections = [c.name for c in qdrant.get_collections().collections]
 
             if COLLECTION not in existing_collections:
-                # First-time: create the collection
                 print(f"[INGEST] Creating new Qdrant collection: {COLLECTION}")
                 qdrant.create_collection(
                     collection_name=COLLECTION,
@@ -176,9 +209,8 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
             print(f"Qdrant collection setup error ({str(e)}). Retrying {retry_attempt + 1}/5...")
             time.sleep(5)
 
-    # Metadata indexes — MUST be created BEFORE any filtered operations
-    # (idempotent — safe to call even if they already exist)
-    for field in ["language", "path", "source", "repo_id", "commit_hash", "type"]:
+    # Payload indexes for multi-tenant isolation
+    for field in ["userId", "user_id", "repoId", "repo_id", "filePath", "path", "source", "branch", "commitSHA", "commit_hash", "language", "type"]:
         try:
             qdrant.create_payload_index(
                 COLLECTION,
@@ -186,29 +218,34 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
                 field_schema="keyword"
             )
         except Exception:
-            pass  # Index already exists
+            pass
 
-    # Delete only this repo's old points (now safe because repo_id index exists)
+    # Delete existing points scoped strictly to this (userId, repoId)
     try:
-        print(f"[INGEST] Deleting existing points for repo_id: {repo_id}")
+        delete_conditions = [
+            FieldCondition(
+                key="metadata.repo_id",
+                match=MatchValue(value=repo_id)
+            )
+        ]
+        if user_id:
+            delete_conditions.append(
+                FieldCondition(
+                    key="metadata.userId",
+                    match=MatchValue(value=user_id)
+                )
+            )
+        print(f"[INGEST] Deleting existing points for repo_id={repo_id}, userId={user_id}")
         qdrant.delete(
             collection_name=COLLECTION,
-            points_selector=Filter(
-                must=[
-                    FieldCondition(
-                        key="metadata.repo_id",
-                        match=MatchValue(value=repo_id)
-                    )
-                ]
-            )
+            points_selector=Filter(must=delete_conditions)
         )
-        print(f"[INGEST] Deleted old points for {repo_id}")
+        print(f"[INGEST] Deleted old points for repo_id={repo_id}, userId={user_id}")
     except Exception as e:
-        print(f"[INGEST] No existing points to delete for {repo_id} (or delete failed: {e})")
+        print(f"[INGEST] No existing points to delete (or delete failed: {e})")
 
     # 6. Embeddings + Qdrant upsert with UUID point IDs
     for i in range(0, len(all_chunks), BATCH_SIZE):
-
         batch = all_chunks[i:i + BATCH_SIZE]
         vectors = embed_batch([c.page_content for c in batch])
 
@@ -251,9 +288,9 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
         }
 
         if i + BATCH_SIZE < len(all_chunks):
-            time.sleep(5)
+            time.sleep(2)
 
-    print(f"[INGEST] === Ingestion complete for {repo_id}: {len(all_chunks)} chunks indexed ===\n")
+    print(f"[INGEST] === Ingestion complete for {repo_id} (user: {user_id}): {len(all_chunks)} chunks indexed ===\n")
 
     yield {
         "type": "complete",
@@ -263,3 +300,88 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
         "visualAssets": len(visual_docs),
         "percent": 100
     }
+
+
+def delete_repository_vectors(repo_id: str, user_id: str = "default_user") -> bool:
+    """Delete all Qdrant vectors and BM25 index for a specific user and repository."""
+    print(f"[CLEANUP] Deleting Qdrant vectors and BM25 for repo={repo_id}, user={user_id}")
+    try:
+        qdrant = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=60.0
+        )
+        delete_conditions = [
+            FieldCondition(
+                key="metadata.repo_id",
+                match=MatchValue(value=repo_id)
+            )
+        ]
+        if user_id:
+            delete_conditions.append(
+                FieldCondition(
+                    key="metadata.userId",
+                    match=MatchValue(value=user_id)
+                )
+            )
+        qdrant.delete(
+            collection_name=COLLECTION,
+            points_selector=Filter(must=delete_conditions)
+        )
+        print(f"[CLEANUP] Deleted Qdrant points for {repo_id} ({user_id})")
+    except Exception as e:
+        print(f"[CLEANUP WARN] Failed deleting Qdrant vectors: {e}")
+
+    # Remove BM25 file
+    try:
+        bm25_file = get_bm25_path(repo_id, user_id)
+        if os.path.exists(bm25_file):
+            os.remove(bm25_file)
+            print(f"[CLEANUP] Removed BM25 index file: {bm25_file}")
+    except Exception as e:
+        print(f"[CLEANUP WARN] Failed removing BM25 index: {e}")
+
+    return True
+
+
+
+def delete_repository_vectors(repo_id: str, user_id: str = "default_user") -> bool:
+    """Delete all Qdrant vectors and BM25 index for a specific user and repository."""
+    print(f"[CLEANUP] Deleting Qdrant vectors and BM25 for repo={repo_id}, user={user_id}")
+    try:
+        qdrant = QdrantClient(
+            url=os.getenv("QDRANT_URL"),
+            api_key=os.getenv("QDRANT_API_KEY"),
+            timeout=60.0
+        )
+        delete_conditions = [
+            FieldCondition(
+                key="metadata.repo_id",
+                match=MatchValue(value=repo_id)
+            )
+        ]
+        if user_id:
+            delete_conditions.append(
+                FieldCondition(
+                    key="metadata.userId",
+                    match=MatchValue(value=user_id)
+                )
+            )
+        qdrant.delete(
+            collection_name=COLLECTION,
+            points_selector=Filter(must=delete_conditions)
+        )
+        print(f"[CLEANUP] Deleted Qdrant points for {repo_id} ({user_id})")
+    except Exception as e:
+        print(f"[CLEANUP WARN] Failed deleting Qdrant vectors: {e}")
+
+    # Remove BM25 file
+    try:
+        bm25_file = get_bm25_path(repo_id, user_id)
+        if os.path.exists(bm25_file):
+            os.remove(bm25_file)
+            print(f"[CLEANUP] Removed BM25 index file: {bm25_file}")
+    except Exception as e:
+        print(f"[CLEANUP WARN] Failed removing BM25 index: {e}")
+
+    return True

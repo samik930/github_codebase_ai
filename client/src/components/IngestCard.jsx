@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   FolderGit2, Loader2, CheckCircle, AlertCircle, ArrowRight, 
-  Clock, AlertTriangle, Layers, FileCode, Database, Cpu
+  Clock, AlertTriangle, Layers, FileCode, Database, Cpu, RotateCw
 } from 'lucide-react';
 
 function GithubIcon({ size = 18, style }) {
@@ -18,8 +18,61 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [progress, setProgress] = useState(0);
-  const [batchInfo, setBatchInfo] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
+  const [activeJobId, setActiveJobId] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null); // 'queued' | 'processing' | 'completed' | 'failed'
+  
+  const pollTimerRef = useRef(null);
+
+  // Clean up polling timer on unmount
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) {
+        clearInterval(pollTimerRef.current);
+      }
+    };
+  }, []);
+
+  const startPolling = (jobId) => {
+    if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+
+    pollTimerRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/ingest/status/${jobId}`);
+        if (!res.ok) {
+          if (res.status === 404) return;
+          throw new Error('Failed to fetch job status');
+        }
+
+        const data = await res.json();
+        setJobStatus(data.status);
+        setProgress(data.progress || 0);
+        setStatusMessage(data.stage || `Status: ${data.status}`);
+
+        if (data.status === 'completed') {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+          setLoading(false);
+          setProgress(100);
+          setStatusMessage('Ingestion completed successfully!');
+          setUrl('');
+          onIngestSuccess({
+            repository: data.repoId,
+            files: data.filesCount,
+            visualFiles: data.visualCount,
+            status: 'completed'
+          });
+        } else if (data.status === 'failed') {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+          setLoading(false);
+          setError(data.error || 'Ingestion failed during execution');
+        }
+      } catch (err) {
+        console.warn('Polling error:', err.message);
+      }
+    }, 1500);
+  };
 
   const handleIngest = async (e) => {
     if (e) e.preventDefault();
@@ -28,8 +81,8 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
     setLoading(true);
     setError(null);
     setProgress(0);
-    setBatchInfo(null);
-    setStatusMessage('Connecting to repository ingestion pipeline...');
+    setJobStatus('queued');
+    setStatusMessage('Submitting ingestion job to BullMQ queue...');
 
     try {
       const response = await fetch('/api/ingest', {
@@ -44,74 +97,60 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
         }),
       });
 
+      const data = await response.json();
+
+      if (response.status === 409) {
+        // Active job already running
+        setActiveJobId(data.jobId);
+        setJobStatus(data.status);
+        setProgress(data.progress || 0);
+        setStatusMessage(data.stage || 'Ingestion job is already running...');
+        startPolling(data.jobId);
+        return;
+      }
 
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || 'Ingestion request failed');
+        throw new Error(data.error || data.message || 'Ingestion request failed');
       }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
+      // Job successfully queued
+      setActiveJobId(data.jobId);
+      setJobStatus('queued');
+      setStatusMessage('Job queued in background. Waiting for worker...');
+      startPolling(data.jobId);
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n\n');
-        buffer = lines.pop(); // keep trailing incomplete chunk
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('data: ')) {
-            const jsonStr = trimmed.replace(/^data:\s*/, '');
-            try {
-              const event = JSON.parse(jsonStr);
-
-              if (event.type === 'error') {
-                throw new Error(event.error || 'Ingestion process error');
-              }
-
-              if (event.type === 'status') {
-                setStatusMessage(event.message);
-              }
-
-              if (event.percent !== undefined) {
-                setProgress(event.percent);
-              }
-
-              if (event.currentBatch !== undefined && event.totalBatches !== undefined) {
-                setBatchInfo({
-                  currentBatch: event.currentBatch,
-                  totalBatches: event.totalBatches,
-                  processedChunks: event.processedChunks,
-                  totalChunks: event.totalChunks
-                });
-                setStatusMessage(`Processing batch ${event.currentBatch} of ${event.totalBatches} (${event.processedChunks} / ${event.totalChunks} chunks)`);
-              }
-
-              if (event.type === 'complete') {
-                setProgress(100);
-                setStatusMessage('Ingestion completed successfully!');
-                onIngestSuccess(event);
-                setUrl('');
-                setLoading(false);
-                return;
-              }
-            } catch (err) {
-              if (err.message && err.message !== 'Ingestion process error') {
-                console.error("SSE parse error:", err);
-              } else {
-                throw err;
-              }
-            }
-          }
-        }
-      }
     } catch (err) {
-      setError(err.message || 'Failed to ingest repository');
-    } finally {
+      setError(err.message || 'Failed to submit ingestion job');
+      setLoading(false);
+    }
+  };
+
+  const handleRetry = async () => {
+    if (!activeJobId) return;
+
+    setLoading(true);
+    setError(null);
+    setProgress(0);
+    setJobStatus('queued');
+    setStatusMessage('Re-queuing failed job to BullMQ...');
+
+    try {
+      const res = await fetch(`/api/ingest/retry/${activeJobId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: user?.isDemo ? null : (user?.email || user?.id || null)
+        })
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'Failed to retry job');
+      }
+
+      startPolling(activeJobId);
+    } catch (err) {
+      setError(err.message || 'Failed to retry job');
       setLoading(false);
     }
   };
@@ -131,8 +170,13 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
       <div className="section-title-bar">
         <div className="section-title">
           <GithubIcon size={20} style={{ color: 'var(--accent-primary)' }} />
-          <span>INGEST REPOSITORY</span>
+          <span>INGEST REPOSITORY (CONCURRENT BULLMQ PIPELINE)</span>
         </div>
+        {activeJobId && (
+          <span className="title-badge" style={{ fontSize: '0.72rem' }}>
+            JOB: {activeJobId}
+          </span>
+        )}
       </div>
 
       {/* Input Form */}
@@ -150,24 +194,28 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
           {loading ? (
             <>
               <Loader2 size={18} className="spinner" />
-              <span>INDEXING PIPELINE...</span>
+              <span>{jobStatus === 'queued' ? 'QUEUED IN REDIS...' : 'WORKER PROCESSING...'}</span>
             </>
           ) : (
             <>
-              <span>EXECUTE INGEST</span>
+              <span>QUEUE INGESTION</span>
               <ArrowRight size={18} />
             </>
           )}
         </button>
       </form>
 
-      {/* Real-time Batch Progress Loading Bar */}
+      {/* Real-time Job Progress Loading Bar */}
       {loading && (
         <div className="ingest-progress-box">
           <div className="ingest-progress-header">
             <div className="ingest-progress-title">
               <Loader2 size={18} className="spinner" />
-              <span>Ingestion in Progress... Please wait! (May take several minutes)</span>
+              <span>
+                {jobStatus === 'queued' 
+                  ? 'Queued in BullMQ (Waiting for free ingestion worker)...'
+                  : 'Worker processing repository ingestion in background...'}
+              </span>
             </div>
             <span className="ingest-progress-pct">{progress}%</span>
           </div>
@@ -175,7 +223,7 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
           <div className="ingest-progress-bar-track">
             <div 
               className="ingest-progress-bar-fill" 
-              style={{ width: `${progress}%` }} 
+              style={{ width: `${Math.max(progress, 5)}%` }} 
             />
           </div>
 
@@ -184,21 +232,41 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
               <Cpu size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
               <span>{statusMessage || 'Processing codebase vectors...'}</span>
             </div>
-
-            {batchInfo && (
-              <span style={{ fontWeight: '700', color: 'var(--accent-primary)', background: 'rgba(37, 99, 235, 0.06)', padding: '2px 8px', borderRadius: '4px' }}>
-                BATCH {batchInfo.currentBatch}/{batchInfo.totalBatches} ({batchInfo.processedChunks}/{batchInfo.totalChunks} CHUNKS)
-              </span>
-            )}
+            <span style={{ 
+              fontWeight: '700', 
+              color: jobStatus === 'queued' ? 'var(--accent-yellow)' : 'var(--accent-primary)', 
+              background: 'rgba(37, 99, 235, 0.08)', 
+              padding: '2px 8px', 
+              borderRadius: '4px',
+              textTransform: 'uppercase',
+              fontSize: '0.74rem'
+            }}>
+              {jobStatus || 'QUEUED'}
+            </span>
           </div>
         </div>
       )}
 
-      {/* Error Message */}
+      {/* Error Message with Retry Button */}
       {error && (
-        <div className="hud-pill" style={{ padding: '12px 18px', background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626', borderRadius: '10px' }}>
-          <AlertCircle size={18} style={{ flexShrink: 0 }} />
-          <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem' }}>{error}</span>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+          <div className="hud-pill" style={{ padding: '12px 18px', background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626', borderRadius: '10px' }}>
+            <AlertCircle size={18} style={{ flexShrink: 0 }} />
+            <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem' }}>{error}</span>
+          </div>
+          {activeJobId && (
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button 
+                type="button" 
+                onClick={handleRetry} 
+                className="btn-cyber-primary"
+                style={{ padding: '8px 18px', fontSize: '0.82rem', display: 'flex', alignItems: 'center', gap: '6px' }}
+              >
+                <RotateCw size={14} />
+                <span>RETRY FAILED JOB</span>
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -208,7 +276,7 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
           <div className="hud-pill hud-pill-active" style={{ padding: '10px 16px', borderRadius: '10px' }}>
             <CheckCircle size={18} style={{ color: 'var(--accent-green)' }} />
             <span style={{ fontFamily: 'Space Grotesk, sans-serif', fontWeight: '600', wordBreak: 'break-word' }}>
-              REPOSITORY INDEXED SUCCESSFULLY: <strong>{activeRepo.repository}</strong>
+              REPOSITORY READY: <strong>{activeRepo.repository}</strong>
             </span>
           </div>
 
@@ -217,7 +285,7 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
               <span className="telemetry-label">SOURCE FILES</span>
               <div className="telemetry-value">
                 <FileCode size={18} style={{ color: 'var(--accent-primary)' }} />
-                <span>{activeRepo.files}</span>
+                <span>{activeRepo.files || 0}</span>
               </div>
             </div>
 
@@ -230,10 +298,10 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
             </div>
 
             <div className="telemetry-card">
-              <span className="telemetry-label">INDEX STATUS</span>
+              <span className="telemetry-label">QUEUE STATUS</span>
               <div className="telemetry-value" style={{ color: 'var(--accent-green)' }}>
                 <Database size={18} />
-                <span>READY</span>
+                <span>COMPLETED</span>
               </div>
             </div>
           </div>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Cpu, GitBranch, ChevronDown, LogOut, EyeOff, User as UserIcon } from 'lucide-react';
+import { Cpu, GitBranch, ChevronDown, LogOut, EyeOff, User as UserIcon, Trash2 } from 'lucide-react';
 import { ThemePicker } from './ThemePicker';
 
 export function Header({ 
@@ -8,6 +8,7 @@ export function Header({
   ingestedRepos = [], 
   selectedRepoId, 
   onSelectRepo, 
+  onDeleteRepo,
   currentTheme, 
   onSelectTheme,
   user,
@@ -24,7 +25,7 @@ export function Header({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <h1 className="brand-title">CODEBASE COPILOT</h1>
           </div>
-          <p className="brand-subtitle">AI RAG Codebase Intelligence</p>
+          <p className="brand-subtitle">AI Multi-User RAG Codebase Intelligence</p>
         </div>
       </div>
 
@@ -32,35 +33,66 @@ export function Header({
       <div className="hud-telemetry-bar">
         {/* Repository Selector Dropdown — shown when repos are available */}
         {ingestedRepos.length > 0 && (
-          <div className="repo-selector-wrapper">
-            {activeRepo?.ownerAvatar ? (
-              <img
-                src={activeRepo.ownerAvatar}
-                alt={activeRepo.repository?.split('/')[0]}
-                style={{
-                  width: '18px',
-                  height: '18px',
-                  borderRadius: '50%',
-                  objectFit: 'cover',
-                  flexShrink: 0,
-                  border: '1px solid var(--accent-secondary)'
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <div className="repo-selector-wrapper">
+              {activeRepo?.ownerAvatar ? (
+                <img
+                  src={activeRepo.ownerAvatar}
+                  alt={activeRepo.repository?.split('/')[0]}
+                  style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '50%',
+                    objectFit: 'cover',
+                    flexShrink: 0,
+                    border: '1px solid var(--accent-secondary)'
+                  }}
+                />
+              ) : (
+                <GitBranch size={13} style={{ color: 'var(--accent-secondary)', flexShrink: 0 }} />
+              )}
+              <select
+                className="repo-selector"
+                value={selectedRepoId}
+                onChange={(e) => onSelectRepo(e.target.value)}
+              >
+                {ingestedRepos.map((repo) => (
+                  <option key={repo.repository} value={repo.repository}>
+                    {repo.repository}{repo.files ? ` (${repo.files} files)` : ''}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={13} className="repo-selector-chevron" />
+            </div>
+
+            {selectedRepoId && onDeleteRepo && (
+              <button
+                type="button"
+                className="btn-delete-repo"
+                onClick={() => {
+                  if (window.confirm(`Are you sure you want to delete repository "${selectedRepoId}" and all indexed vector data?`)) {
+                    onDeleteRepo(selectedRepoId);
+                  }
                 }}
-              />
-            ) : (
-              <GitBranch size={13} style={{ color: 'var(--accent-secondary)', flexShrink: 0 }} />
+                title={`Delete repository ${selectedRepoId}`}
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#ef4444',
+                  borderRadius: '6px',
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  fontSize: '0.74rem',
+                  fontFamily: 'JetBrains Mono, monospace'
+                }}
+              >
+                <Trash2 size={12} />
+                <span>PURGE</span>
+              </button>
             )}
-            <select
-              className="repo-selector"
-              value={selectedRepoId}
-              onChange={(e) => onSelectRepo(e.target.value)}
-            >
-              {ingestedRepos.map((repo) => (
-                <option key={repo.repository} value={repo.repository}>
-                  {repo.repository}{repo.files ? ` (${repo.files} files)` : ''}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={13} className="repo-selector-chevron" />
           </div>
         )}
 
@@ -103,4 +135,3 @@ export function Header({
     </header>
   );
 }
-
