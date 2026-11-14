@@ -16,7 +16,7 @@ export default function App() {
     } catch { return null; }
   });
 
-  const userKey = user ? (user.isDemo ? 'demo' : (user.email || user.id || 'anonymous')) : 'guest';
+  const userKey = user ? (user.isDemo ? 'demo_user' : (user.email || user.id || 'demo_user')) : 'guest';
 
   // Multi-repo state: isolated per user
   const [ingestedRepos, setIngestedRepos] = useState(() => {
@@ -169,22 +169,33 @@ export default function App() {
     setSelectedRepoId(repoId);
   };
 
-  // Handle repository deletion
+  // Handle repository deletion / purge with immediate optimistic UI update
   const handleDeleteRepo = async (repoId) => {
+    if (!repoId) return;
+
+    // 1. Optimistic UI update: immediately remove from dropdown and state
+    setIngestedRepos(prev => {
+      const updated = prev.filter(r => r.repository !== repoId);
+      const nextSelected = updated[0]?.repository || '';
+      setSelectedRepoId(nextSelected);
+      try {
+        localStorage.setItem(`codebase_copilot_repos_${userKey}`, JSON.stringify(updated));
+        localStorage.setItem(`codebase_copilot_selected_repo_${userKey}`, nextSelected);
+      } catch (e) {}
+      return updated;
+    });
+
+    // 2. Call backend to cancel queue, delete Qdrant vectors, BM25 file, and MongoDB records
     try {
       const res = await fetch(`/api/repositories?repo_id=${encodeURIComponent(repoId)}&userId=${encodeURIComponent(userKey)}`, {
         method: 'DELETE'
       });
-      if (res.ok) {
-        setIngestedRepos(prev => {
-          const updated = prev.filter(r => r.repository !== repoId);
-          const nextSelected = updated[0]?.repository || '';
-          setSelectedRepoId(nextSelected);
-          return updated;
-        });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        console.warn('[WARN] Backend deletion notice:', errData.error || res.statusText);
       }
     } catch (err) {
-      console.error('Failed to delete repository:', err);
+      console.error('Failed to delete repository from backend:', err.message);
     }
   };
 
@@ -217,6 +228,7 @@ export default function App() {
         <main className="main-content-flow" style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
           <IngestCard
             onIngestSuccess={handleIngestSuccess}
+            onDeleteRepo={handleDeleteRepo}
             activeRepo={activeRepo}
             user={user}
           />

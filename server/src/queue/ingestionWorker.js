@@ -1,5 +1,5 @@
 import { Worker } from "bullmq";
-import { createRedisConnection } from "./redis.js";
+import { createRedisConnection, getSharedRedisConnection } from "./redis.js";
 import { INGESTION_QUEUE_NAME } from "./ingestionQueue.js";
 import { IngestionJob } from "../models/IngestionJob.js";
 import { Repository } from "../models/Repository.js";
@@ -33,6 +33,34 @@ export function createIngestionWorker() {
         `[WORKER ${process.pid}] Starting job ${jobId} for repo ${repoId} (user: ${userId})`
       );
 
+      const redis = getSharedRedisConnection();
+      const cancelRepoKey = `cancel_ingest:${userId || "all"}:${repoId}`;
+      const cancelJobKey = `cancel_job:${jobId}`;
+
+      const checkIfCancelled = async () => {
+        try {
+          const [valRepo, valJob, repoDoc] = await Promise.all([
+            redis.get(cancelRepoKey),
+            redis.get(cancelJobKey),
+            Repository.findOne({ userId, repoId }),
+          ]);
+          if (valRepo === "1" || valJob === "1" || !repoDoc || repoDoc.status === "cancelled") {
+            return true;
+          }
+        } catch (e) {
+          // ignore
+        }
+        return false;
+      };
+
+      // Check if job was purged before starting
+      if (await checkIfCancelled()) {
+        console.log(`[WORKER ${process.pid}] Job ${jobId} for ${repoId} was cancelled/purged. Skipping execution.`);
+        await job.discard().catch(() => {});
+        await job.remove().catch(() => {});
+        return { cancelled: true };
+      }
+
       // 1. Mark as processing in MongoDB
       await IngestionJob.findOneAndUpdate(
         { jobId },
@@ -59,6 +87,13 @@ export function createIngestionWorker() {
         const ghRepo = await getRepository(owner, repo);
         const effectiveBranch = branch || ghRepo.default_branch || "main";
 
+        if (await checkIfCancelled()) {
+          console.log(`[WORKER ${process.pid}] Job ${jobId} for ${repoId} was cancelled/purged after repo info. Aborting.`);
+          await job.discard().catch(() => {});
+          await job.remove().catch(() => {});
+          return { cancelled: true };
+        }
+
         const treeResult = await getRepositoryTree(owner, repo, effectiveBranch);
         const effectiveCommit = commitSHA || treeResult.sha || "";
 
@@ -73,6 +108,13 @@ export function createIngestionWorker() {
           }
         );
 
+        if (await checkIfCancelled()) {
+          console.log(`[WORKER ${process.pid}] Job ${jobId} for ${repoId} was cancelled/purged before file fetch. Aborting.`);
+          await job.discard().catch(() => {});
+          await job.remove().catch(() => {});
+          return { cancelled: true };
+        }
+
         const files = await getUsefulFiles(owner, repo, treeResult.tree);
         const visualFiles = await getVisualFiles(
           owner,
@@ -85,6 +127,13 @@ export function createIngestionWorker() {
           `[WORKER ${process.pid}] Fetched ${files.length} code files and ${visualFiles.length} visual assets for ${repoId}`
         );
 
+        if (await checkIfCancelled()) {
+          console.log(`[WORKER ${process.pid}] Job ${jobId} for ${repoId} was cancelled/purged after downloading files. Aborting.`);
+          await job.discard().catch(() => {});
+          await job.remove().catch(() => {});
+          return { cancelled: true };
+        }
+
         await job.updateProgress(30);
         await IngestionJob.findOneAndUpdate(
           { jobId },
@@ -96,7 +145,7 @@ export function createIngestionWorker() {
           }
         );
 
-        // 3. Invoke FastAPI /ingest endpoint
+        // 3. Invoke FastAPI /ingest endpoint with AbortController for cancelability
         const headers = {
           "Content-Type": "application/json",
         };
@@ -113,10 +162,12 @@ export function createIngestionWorker() {
           visual_files: visualFiles,
         };
 
+        const abortController = new AbortController();
         const response = await fetch(`${FASTAPI_INTERNAL_URL}/ingest`, {
           method: "POST",
           headers,
           body: JSON.stringify(ingestPayload),
+          signal: abortController.signal,
         });
 
         if (!response.ok) {
@@ -134,6 +185,23 @@ export function createIngestionWorker() {
         let lastError = null;
 
         while (true) {
+          if (await checkIfCancelled()) {
+            console.log(`[WORKER ${process.pid}] Job ${jobId} for ${repoId} was cancelled/purged during SSE indexing. Aborting stream...`);
+            abortController.abort();
+            reader.cancel().catch(() => {});
+            // Clean up any partially ingested vectors from Qdrant and BM25
+            try {
+              await fetch(`${FASTAPI_INTERNAL_URL}/delete-repo`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ repo_id: repoId, user_id: userId }),
+              });
+            } catch (e) {}
+            await job.discard().catch(() => {});
+            await job.remove().catch(() => {});
+            return { cancelled: true };
+          }
+
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -194,6 +262,21 @@ export function createIngestionWorker() {
           );
         }
 
+        // Before finalizing, double-check if repo was purged while finishing
+        if (await checkIfCancelled()) {
+          console.log(`[WORKER ${process.pid}] Job ${jobId} for ${repoId} was cancelled right before completion. Purging.`);
+          try {
+            await fetch(`${FASTAPI_INTERNAL_URL}/delete-repo`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ repo_id: repoId, user_id: userId }),
+            });
+          } catch (e) {}
+          await job.discard().catch(() => {});
+          await job.remove().catch(() => {});
+          return { cancelled: true };
+        }
+
         // 5. Update MongoDB upon verified success
         await IngestionJob.findOneAndUpdate(
           { jobId },
@@ -242,6 +325,14 @@ export function createIngestionWorker() {
           visualCount: visualFiles.length,
         };
       } catch (err) {
+        // If cancellation caused the abort, exit cleanly without recording error
+        if (await checkIfCancelled()) {
+          console.log(`[WORKER ${process.pid}] Job ${jobId} aborted due to purge/cancellation.`);
+          await job.discard().catch(() => {});
+          await job.remove().catch(() => {});
+          return { cancelled: true };
+        }
+
         console.error(
           `[WORKER ${process.pid}] Job ${jobId} failed: ${err.message}`
         );
@@ -285,4 +376,3 @@ export function createIngestionWorker() {
 
   return worker;
 }
-

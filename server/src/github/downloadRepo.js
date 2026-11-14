@@ -57,7 +57,26 @@ const IGNORED_DIRECTORIES = [
     "dist",
     "build",
     ".next",
-    "coverage"
+    "coverage",
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".turbo",
+    ".cache"
+];
+
+const IGNORED_FILENAMES = [
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "bun.lockb",
+    "cargo.lock",
+    "poetry.lock",
+    "composer.lock",
+    "gemfile.lock",
+    ".ds_store",
+    "thumbs.db"
 ];
 
 const SUPPORTED_IMAGE_EXTENSIONS = [
@@ -81,27 +100,40 @@ const IGNORED_EXTENSIONS = [
     ".woff",
     ".woff2",
     ".ttf",
-    ".eot"
+    ".eot",
+    ".map"
 ];
 
 export function isUsefulFile(filePath) {
-    const parts = filePath.split("/");
+    if (!filePath) return false;
+    const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+    const parts = normalized.split("/");
+    const fileName = parts[parts.length - 1];
 
-    const hasIgnoredDirectory = parts.some(
-        part => IGNORED_DIRECTORIES.includes(part)
-    );
-
-    if (hasIgnoredDirectory) {
+    // 1. Check ignored directories
+    if (parts.some(part => IGNORED_DIRECTORIES.includes(part))) {
         return false;
     }
 
-    const extension = filePath
-        .substring(filePath.lastIndexOf("."))
-        .toLowerCase();
-
-    if (IGNORED_EXTENSIONS.includes(extension) || SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
+    // 2. Check ignored filenames (lockfiles, system files)
+    if (IGNORED_FILENAMES.includes(fileName)) {
         return false;
     }
+
+    // 3. Check minified or source map files
+    if (fileName.endsWith(".min.js") || fileName.endsWith(".min.css") || fileName.endsWith(".map")) {
+        return false;
+    }
+
+    // 4. Check extension
+    const dotIndex = fileName.lastIndexOf(".");
+    if (dotIndex !== -1) {
+        const extension = fileName.substring(dotIndex);
+        if (IGNORED_EXTENSIONS.includes(extension) || SUPPORTED_IMAGE_EXTENSIONS.includes(extension)) {
+            return false;
+        }
+    }
+
     return true;
 }
 

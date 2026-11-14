@@ -6,7 +6,14 @@ from pydantic import BaseModel
 import json
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
-from ingest import ingest_documents, get_bm25_path, sanitize_repo_id, delete_repository_vectors, BM25_DIR
+from ingest import (
+    ingest_documents, 
+    get_bm25_path, 
+    sanitize_repo_id, 
+    delete_repository_vectors, 
+    cancel_ingestion,
+    BM25_DIR
+)
 from retrieve import retrieve_documents
 from generate import generate_answer
 from sensitive_guard import detect_sensitive_query_intent
@@ -52,7 +59,7 @@ async def ingest_endpoint(request: Request):
     
     print(f"[API] Ingest request: repo_id={repo_id}, user_id={user_id}, branch={branch}, commit_hash={commit_hash}, code_files={len(files)}, visual_files={len(visual_files)}")
     
-    def generate():
+    async def generate():
         try:
             for progress_data in ingest_documents(
                 files, 
@@ -62,6 +69,11 @@ async def ingest_endpoint(request: Request):
                 user_id=user_id,
                 branch=branch
             ):
+                if await request.is_disconnected():
+                    print(f"[API] Client disconnected during ingestion of {repo_id} ({user_id}). Aborting and purging partial vectors...")
+                    cancel_ingestion(repo_id, user_id)
+                    delete_repository_vectors(repo_id, user_id)
+                    break
                 yield f"data: {json.dumps(progress_data)}\n\n"
         except Exception as e:
             import traceback
@@ -117,15 +129,26 @@ async def query_endpoint(request: QueryRequest):
 
 @app.post("/delete-repo")
 async def delete_repo_endpoint(req: DeleteRepoRequest):
-    """Delete all indexed Qdrant points and BM25 index for a specific user and repository."""
+    """Delete all indexed Qdrant points and BM25 index for a specific user and repository, aborting any active run."""
     repo_id = req.repo_id
     user_id = req.user_id or "default_user"
     if not repo_id:
         return JSONResponse(status_code=400, content={"error": "repo_id is required"})
         
-    print(f"[API] Deleting index vectors for repo_id={repo_id}, user_id={user_id}")
+    print(f"[API] Deleting index vectors and cancelling active runs for repo_id={repo_id}, user_id={user_id}")
+    cancel_ingestion(repo_id, user_id)
     success = delete_repository_vectors(repo_id, user_id=user_id)
-    return {"success": success, "message": f"Vectors for {repo_id} deleted successfully."}
+    return {"success": success, "message": f"Vectors for {repo_id} deleted and ingestion cancelled successfully."}
+
+@app.post("/cancel-ingest")
+async def cancel_ingest_endpoint(req: DeleteRepoRequest):
+    """Explicitly cancel ongoing ingestion and purge partial vectors."""
+    repo_id = req.repo_id
+    user_id = req.user_id or "default_user"
+    print(f"[API] Explicit cancel-ingest for repo_id={repo_id}, user_id={user_id}")
+    cancel_ingestion(repo_id, user_id)
+    delete_repository_vectors(repo_id, user_id=user_id)
+    return {"success": True, "message": f"Active ingestion for {repo_id} cancelled and vectors purged."}
 
 @app.get("/repositories")
 async def list_repositories():
@@ -147,4 +170,5 @@ async def list_repositories():
     return {"repositories": repos}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

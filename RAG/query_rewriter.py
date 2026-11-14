@@ -6,6 +6,8 @@ load_dotenv()
 
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
+MODELS = ["gemini-3.6-flash", "gemini-2.5-flash"]
+
 def rewrite_query(question: str) -> str:
     prompt = f"""
 You are a query rewriting system for a codebase RAG application.
@@ -26,15 +28,17 @@ Rules:
 User question:
 "{question}"
 """
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt
-        )
-        rewritten_query = response.text.strip()
-        print("[DEBUG] Original query:", question)
-        print("[DEBUG] Rewritten query:", rewritten_query)
-        return rewritten_query
-    except Exception as e:
-        print("[ERROR] Query rewriting failed:", str(e))
-        return question
+    for model_name in MODELS:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            rewritten_query = response.text.strip()
+            print(f"[DEBUG] Rewritten query ({model_name}):", rewritten_query)
+            return rewritten_query
+        except Exception as e:
+            print(f"[WARN] Query rewriting with {model_name} failed: {e}")
+            
+    print("[ERROR] All query rewriting models failed. Using original question.")
+    return question

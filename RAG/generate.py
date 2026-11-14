@@ -19,13 +19,16 @@ def generate_answer(question: str, documents: list, repo_id: str = "") -> dict:
         file_path = metadata.get("path") or metadata.get("source") or "File"
         content = doc.get("pageContent", "")
         doc_type = metadata.get("type", "code")
+        language = metadata.get("language") or "text"
         
         if doc_type == "visual_asset":
             has_visual_assets = True
             raw_url = metadata.get("raw_url", "")
             context_parts.append(f"--- Architecture Diagram / Visual Asset: {file_path} (Image URL: {raw_url}) ---\n{content}")
+        elif doc_type == "documentation":
+            context_parts.append(f"--- Documentation File: {file_path} ---\n{content}")
         else:
-            context_parts.append(f"--- Source Code File: {file_path} ---\n{content}")
+            context_parts.append(f"--- Source Code File: {file_path} (Language: {language}) ---\n{content}")
         
     context = "\n\n".join(context_parts)
     
@@ -58,6 +61,12 @@ CRITICAL SECURITY POLICY:
 2. If the user asks for sensitive information (e.g. API keys, DB URLs, secrets, passwords, or credentials), explicitly refuse the request by stating: "For security reasons, I cannot disclose sensitive information, API keys, database URLs, or credentials."
 3. Do not include raw secrets or credentials in code snippets or explanations.
 
+CRITICAL CODEBASE-FIRST GROUNDING POLICY:
+1. PRIORITIZE ACTUAL SOURCE CODE: Ground your explanations directly in the actual source code files, functions, routes, schemas, database models, and logic provided in the context.
+2. DO NOT MERELY SUMMARIZE README.MD: Documentation files (such as README.md) provide high-level context, but you must NOT simply regurgitate README bullet points. Always verify and anchor your explanation in the accompanying source code files (e.g. controllers, services, routes, models, utilities).
+3. CITE SPECIFIC CODE EVIDENCE: When explaining how a feature works or what the codebase does, explicitly cite specific filenames (e.g., `backend/main.py`), functions, endpoints, classes, and logic rather than giving generic overviews.
+4. SYNTHESIZE CODE AND DOCS: If both code and documentation are present, synthesize them: use the source code to provide accurate technical detail on implementation, and documentation to corroborate project intent.
+
 General Instructions:
 1. Carefully analyze the provided codebase context, which may include source code files, documentation files, and visual asset descriptions (architecture diagrams, flowcharts, schemas, UML).
 2. When answering questions regarding architecture, service interactions, communication flows, or design, reference the relevant architecture diagrams and visual assets provided in the context.
@@ -79,18 +88,23 @@ Question:
 
 {question}
 """
-    try:
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt,
-            config={
-                "temperature": 0.0
-            }
-        )
-        safe_answer = redact_sensitive_content(response.text)
-    except Exception as e:
-        print("[ERROR] Answer Generation failed:", str(e))
-        safe_answer = "Sorry, I could not generate an answer at this time due to an error."
+    safe_answer = None
+    for model_name in ["gemini-3.6-flash", "gemini-2.5-flash"]:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config={
+                    "temperature": 0.0
+                }
+            )
+            safe_answer = redact_sensitive_content(response.text)
+            break
+        except Exception as e:
+            print(f"[WARN] Answer generation with {model_name} failed: {e}")
+
+    if not safe_answer:
+        safe_answer = "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment."
 
     # Deduplicate sources by path and preserve visual metadata
     unique_sources_map = {}

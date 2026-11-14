@@ -39,19 +39,22 @@ def load_bm25_index(path):
         return pickle.load(f)
 
 
-def search_bm25(index, query, limit=10):
+def search_bm25(index, query, limit=30):
     if not index.get("bm25"):
         return []
         
-    scores = index["bm25"].get_scores(query.lower().split())
+    tokens = query.lower().split()
+    if not tokens:
+        return []
 
-    results = sorted(
-        zip(index["documents"], scores),
-        key=lambda x: x[1],
-        reverse=True
-    )
+    scores = index["bm25"].get_scores(tokens)
 
-    return [
+    # Only keep results with positive BM25 score (actual term match)
+    positive_matches = [
         {"document": doc, "score": score}
-        for doc, score in results[:limit]
+        for doc, score in zip(index["documents"], scores)
+        if score > 0.0
     ]
+
+    positive_matches.sort(key=lambda x: x["score"], reverse=True)
+    return positive_matches[:limit]

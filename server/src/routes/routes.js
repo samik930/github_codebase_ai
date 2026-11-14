@@ -3,6 +3,7 @@ import {
     getJobStatusController,
     getUserJobsController,
     retryJobController,
+    cancelJobController,
     queryController, 
     repositoriesController,
     getChatHistoryController,
@@ -21,6 +22,8 @@ router.post('/ingest', ingestController);
 router.get('/ingest/status/:jobId', getJobStatusController);
 router.get('/ingest/jobs', getUserJobsController);
 router.post('/ingest/retry/:jobId', retryJobController);
+router.post('/ingest/cancel/:jobId', cancelJobController);
+router.delete('/ingest/job/:jobId', cancelJobController);
 
 // Query & Repositories endpoints
 router.post('/query', queryController);

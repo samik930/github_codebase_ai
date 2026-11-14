@@ -69,7 +69,9 @@ export function Header({
               <button
                 type="button"
                 className="btn-delete-repo"
-                onClick={() => {
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
                   if (window.confirm(`Are you sure you want to delete repository "${selectedRepoId}" and all indexed vector data?`)) {
                     onDeleteRepo(selectedRepoId);
                   }

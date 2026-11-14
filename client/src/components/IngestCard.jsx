@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   FolderGit2, Loader2, CheckCircle, AlertCircle, ArrowRight, 
-  Clock, AlertTriangle, Layers, FileCode, Database, Cpu, RotateCw
+  Clock, AlertTriangle, Layers, FileCode, Database, Cpu, RotateCw, Trash2
 } from 'lucide-react';
 
 function GithubIcon({ size = 18, style }) {
@@ -13,7 +13,7 @@ function GithubIcon({ size = 18, style }) {
   );
 }
 
-export function IngestCard({ onIngestSuccess, activeRepo, user }) {
+export function IngestCard({ onIngestSuccess, onDeleteRepo, activeRepo, user }) {
   const [url, setUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -23,6 +23,7 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
   const [jobStatus, setJobStatus] = useState(null); // 'queued' | 'processing' | 'completed' | 'failed'
   
   const pollTimerRef = useRef(null);
+  const isCancelledRef = useRef(false);
 
   // Clean up polling timer on unmount
   useEffect(() => {
@@ -34,17 +35,55 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
   }, []);
 
   const startPolling = (jobId) => {
+    isCancelledRef.current = false;
     if (pollTimerRef.current) clearInterval(pollTimerRef.current);
 
     pollTimerRef.current = setInterval(async () => {
+      if (isCancelledRef.current) {
+        if (pollTimerRef.current) {
+          clearInterval(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+        return;
+      }
+
       try {
         const res = await fetch(`/api/ingest/status/${jobId}`);
+        if (isCancelledRef.current) return;
+
         if (!res.ok) {
-          if (res.status === 404) return;
+          if (res.status === 404) {
+            // Job was deleted or cancelled from queue
+            if (pollTimerRef.current) {
+              clearInterval(pollTimerRef.current);
+              pollTimerRef.current = null;
+            }
+            setLoading(false);
+            setProgress(0);
+            setJobStatus(null);
+            setActiveJobId(null);
+            setStatusMessage('');
+            return;
+          }
           throw new Error('Failed to fetch job status');
         }
 
         const data = await res.json();
+        if (isCancelledRef.current) return;
+
+        if (data.status === 'cancelled') {
+          if (pollTimerRef.current) {
+            clearInterval(pollTimerRef.current);
+            pollTimerRef.current = null;
+          }
+          setLoading(false);
+          setProgress(0);
+          setJobStatus(null);
+          setActiveJobId(null);
+          setStatusMessage('');
+          return;
+        }
+
         setJobStatus(data.status);
         setProgress(data.progress || 0);
         setStatusMessage(data.stage || `Status: ${data.status}`);
@@ -69,7 +108,9 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
           setError(data.error || 'Ingestion failed during execution');
         }
       } catch (err) {
-        console.warn('Polling error:', err.message);
+        if (!isCancelledRef.current) {
+          console.warn('Polling error:', err.message);
+        }
       }
     }, 1500);
   };
@@ -152,6 +193,57 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
     } catch (err) {
       setError(err.message || 'Failed to retry job');
       setLoading(false);
+    }
+  };
+
+  const handleCancelAndPurge = async () => {
+    if (!window.confirm("Are you sure you want to cancel and purge this repository ingestion? It will be removed from the queue immediately.")) {
+      return;
+    }
+
+    const currentJobId = activeJobId;
+    const currentUrl = url;
+
+    // 1. Immediately abort polling and set cancellation guard
+    isCancelledRef.current = true;
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+
+    // 2. Synchronously dismiss progress box from UI immediately (0ms latency)
+    setLoading(false);
+    setProgress(0);
+    setJobStatus(null);
+    setActiveJobId(null);
+    setError(null);
+    setStatusMessage("");
+
+    // 3. Extract repository identifier and update parent state if already in list
+    const repoNameFromUrl = currentUrl.trim().replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "").trim();
+    if (repoNameFromUrl && onDeleteRepo) {
+      onDeleteRepo(repoNameFromUrl);
+    }
+
+    // 4. Send cancellation and purge commands to backend in background
+    try {
+      const userKey = user?.isDemo ? "demo_user" : (user?.email || user?.id || "demo_user");
+
+      if (currentJobId) {
+        await fetch(`/api/ingest/cancel/${currentJobId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId: userKey }),
+        }).catch(() => {});
+      }
+
+      if (repoNameFromUrl) {
+        await fetch(`/api/repositories?repo_id=${encodeURIComponent(repoNameFromUrl)}&userId=${encodeURIComponent(userKey)}`, {
+          method: "DELETE",
+        }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn("Cancel/Purge background error:", err);
     }
   };
 
@@ -244,10 +336,35 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
               {jobStatus || 'QUEUED'}
             </span>
           </div>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+            <button
+              type="button"
+              onClick={handleCancelAndPurge}
+              className="btn-delete-repo"
+              title="Cancel ingestion and purge from queue"
+              style={{
+                background: 'rgba(239, 68, 68, 0.1)',
+                border: '1px solid rgba(239, 68, 68, 0.3)',
+                color: '#ef4444',
+                borderRadius: '6px',
+                padding: '5px 12px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
+                fontSize: '0.74rem',
+                fontFamily: 'JetBrains Mono, monospace'
+              }}
+            >
+              <Trash2 size={13} />
+              <span>CANCEL & PURGE FROM QUEUE</span>
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Error Message with Retry Button */}
+      {/* Error Message with Retry and Purge Buttons */}
       {error && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           <div className="hud-pill" style={{ padding: '12px 18px', background: 'rgba(239, 68, 68, 0.08)', borderColor: '#ef4444', color: '#dc2626', borderRadius: '10px' }}>
@@ -255,7 +372,27 @@ export function IngestCard({ onIngestSuccess, activeRepo, user }) {
             <span style={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.85rem' }}>{error}</span>
           </div>
           {activeJobId && (
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button 
+                type="button" 
+                onClick={handleCancelAndPurge} 
+                style={{
+                  background: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#ef4444',
+                  borderRadius: '6px',
+                  padding: '8px 14px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '0.78rem',
+                  fontFamily: 'JetBrains Mono, monospace'
+                }}
+              >
+                <Trash2 size={13} />
+                <span>PURGE FAILED JOB</span>
+              </button>
               <button 
                 type="button" 
                 onClick={handleRetry} 

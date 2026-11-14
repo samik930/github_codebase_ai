@@ -2,7 +2,7 @@ import { parseGithubURL } from "../github/downloadRepo.js";
 import { Repository } from "../models/Repository.js";
 import { IngestionJob } from "../models/IngestionJob.js";
 import { ChatMessage } from "../models/ChatMessage.js";
-import { addIngestionJob } from "../queue/ingestionQueue.js";
+import { addIngestionJob, cancelAndRemoveIngestionJobs } from "../queue/ingestionQueue.js";
 import { OAuth2Client } from "google-auth-library";
 import { randomUUID } from "crypto";
 
@@ -433,7 +433,7 @@ export async function clearChatHistoryController(req, res) {
 }
 
 /**
- * Delete Repository: Deletes Qdrant vectors via FastAPI, BM25 file, ChatMessages, IngestionJobs, and Repository
+ * Delete Repository: Cancels/purges BullMQ queue jobs, deletes Qdrant vectors via FastAPI, BM25 file, ChatMessages, IngestionJobs, and Repository
  */
 export async function deleteRepositoryController(req, res) {
   try {
@@ -451,7 +451,20 @@ export async function deleteRepositoryController(req, res) {
       `[DELETE REPO] Deleting ${decodedRepoId} for user ${effectiveUserId}`
     );
 
-    // 1. Delete vectors and BM25 index from FastAPI service
+    // 1. Immediately cancel and purge any queued or active BullMQ jobs in Redis
+    let jobsRemoved = 0;
+    try {
+      const queueResult = await cancelAndRemoveIngestionJobs({
+        userId: effectiveUserId,
+        repoId: decodedRepoId,
+      });
+      jobsRemoved = queueResult?.removedCount || 0;
+      console.log(`[QUEUE PURGE] Removed ${jobsRemoved} jobs from queue for ${decodedRepoId}`);
+    } catch (queueErr) {
+      console.warn(`[WARN] Queue purge error (continuing with vector & DB cleanup): ${queueErr.message}`);
+    }
+
+    // 2. Delete vectors and BM25 index from FastAPI service
     try {
       const headers = { "Content-Type": "application/json" };
       if (INTERNAL_SERVICE_SECRET) {
@@ -471,20 +484,79 @@ export async function deleteRepositoryController(req, res) {
       console.warn(`[WARN] Could not reach FastAPI to purge vectors: ${apiErr.message}`);
     }
 
-    // 2. Delete MongoDB records
-    const filter = { repoId: decodedRepoId, userId: effectiveUserId };
-    await Repository.deleteOne(filter);
+    // 3. Delete MongoDB records (supporting both demo and demo_user aliases)
+    const userConditions = [effectiveUserId];
+    if (effectiveUserId === "demo_user" || effectiveUserId === "demo") {
+      userConditions.push("demo_user", "demo");
+    }
+    const filter = {
+      repoId: decodedRepoId,
+      userId: { $in: userConditions }
+    };
+
+    await Repository.deleteMany(filter);
     await ChatMessage.deleteMany(filter);
     await IngestionJob.deleteMany(filter);
 
     console.log(`[MONGODB] Cleaned up records for ${decodedRepoId}`);
     return res.json({
       success: true,
-      message: `Repository ${decodedRepoId} and all associated vectors deleted successfully.`,
+      message: `Repository ${decodedRepoId} and all associated queue jobs/vectors deleted successfully.`,
+      jobsRemoved: queueResult.removedCount,
     });
   } catch (error) {
     console.error("[ERROR] Failed to delete repository:", error.message);
     return res.status(500).json({ error: "Failed to delete repository" });
+  }
+}
+
+/**
+ * Explicit Cancel Job endpoint: Cancels a specific job by jobId and purges associated queue entries
+ */
+export async function cancelJobController(req, res) {
+  try {
+    const { jobId } = req.params;
+    const { userId } = req.body || req.query || {};
+
+    if (!jobId) {
+      return res.status(400).json({ error: "jobId is required" });
+    }
+
+    const jobDoc = await IngestionJob.findOne({ jobId });
+    const repoId = jobDoc?.repoId;
+    const effectiveUserId = userId || jobDoc?.userId || "demo_user";
+
+    console.log(`[CANCEL JOB] Cancelling job ${jobId} (repo: ${repoId}, user: ${effectiveUserId})`);
+
+    const queueResult = await cancelAndRemoveIngestionJobs({
+      userId: effectiveUserId,
+      repoId,
+      jobId,
+    });
+
+    if (repoId) {
+      // Purge vectors if any were partially created
+      try {
+        await fetch(`${FASTAPI_INTERNAL_URL}/delete-repo`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo_id: repoId, user_id: effectiveUserId }),
+        });
+      } catch (e) {}
+
+      await Repository.deleteOne({ repoId, userId: effectiveUserId });
+    }
+
+    await IngestionJob.deleteOne({ jobId });
+
+    return res.json({
+      success: true,
+      message: `Job ${jobId} cancelled and purged from queue.`,
+      jobsRemoved: queueResult.removedCount,
+    });
+  } catch (error) {
+    console.error("[ERROR] Failed to cancel job:", error.message);
+    return res.status(500).json({ error: "Failed to cancel job" });
   }
 }
 
