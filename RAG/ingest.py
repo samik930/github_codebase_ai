@@ -176,8 +176,8 @@ def embed_batch(texts: list[str], model: str = EMBEDDING_MODEL) -> list[list[flo
                     active_model = "gemini-embedding-2"
                     continue
                 elif active_model == "gemini-embedding-2":
-                    print(f"[EMBED WARN] Daily quota exhausted on gemini-embedding-2. Switching to gemini-embedding-2-preview fallback.")
-                    active_model = "gemini-embedding-2-preview"
+                    #print(f"[EMBED WARN] Daily quota exhausted on gemini-embedding-2. Switching to gemini-embedding-2-preview fallback.")
+                    #active_model = "gemini-embedding-2-preview"
                     continue
 
             if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str or "500" in err_str:
