@@ -1,0 +1,4 @@
+ID,Category,Question,Faithfulness,Relevancy,Precision,Code Grounding,Composite,Status
+med_db_01,database_and_tech_stack,examine the backend folder and tell me which database is use,0.0,0.0,0.0,0.0,0.0,ERROR
+med_auth_01,authentication,what type of authentication is used here? examine the backen,0.0,0.0,0.0,0.0,0.0,ERROR
+med_db_02,database_and_tech_stack,give the code of the database configuration,0.0,0.0,0.0,0.0,0.0,ERROR

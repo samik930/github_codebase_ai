@@ -1,8 +1,10 @@
 import os
 import json
+import time
+import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
-from google import genai
-from google.genai import types
+from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qmodels
 from bm25 import load_bm25_index, search_bm25
@@ -12,29 +14,70 @@ from ingest import get_bm25_path
 load_dotenv()
 
 COLLECTION_NAME = "codebase_documents"
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
+FASTEMBED_MODEL = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 qdrant = QdrantClient(
     url=os.getenv("QDRANT_URL"),
     api_key=os.getenv("QDRANT_API_KEY"),
     timeout=60.0
 )
 
+# Lazy-loaded FastEmbed singleton for retrieval
+_retrieve_embed_model: TextEmbedding | None = None
+
+def _get_retrieve_embed_model() -> TextEmbedding:
+    global _retrieve_embed_model
+    if _retrieve_embed_model is None:
+        print(f"[RETRIEVE] Loading FastEmbed model: {FASTEMBED_MODEL}")
+        _retrieve_embed_model = TextEmbedding(model_name=FASTEMBED_MODEL)
+        print("[RETRIEVE] FastEmbed model loaded.")
+    return _retrieve_embed_model
+
+# ---------------------------------------------------------------------------
+# In-memory LRU-style cache for query rewrites (avoids repeat Gemini calls)
+# ---------------------------------------------------------------------------
+_REWRITE_CACHE: dict[str, str] = {}
+_REWRITE_CACHE_MAX = 128
+
+def _cached_rewrite_query(question: str) -> str:
+    key = hashlib.md5(question.strip().lower().encode()).hexdigest()
+    if key in _REWRITE_CACHE:
+        print(f"[DEBUG] Query rewrite cache hit for: \"{question[:60]}\"")
+        return _REWRITE_CACHE[key]
+    result = rewrite_query(question)
+    if len(_REWRITE_CACHE) >= _REWRITE_CACHE_MAX:
+        # Evict oldest entry
+        oldest = next(iter(_REWRITE_CACHE))
+        del _REWRITE_CACHE[oldest]
+    _REWRITE_CACHE[key] = result
+    return result
+
 def extract_metadata(question: str) -> dict:
+    """
+    Extract file/language metadata from the question.
+    Fast-path: skip Gemini entirely for short or generic questions.
+    """
+    _EMPTY = {"language": None, "path": None, "source": None}
+
+    lower_q = question.lower().strip()
+
+    # Fast-path 1: very short questions never need metadata filtering
+    if len(lower_q.split()) <= 7:
+        print("[DEBUG] Short query — skipping metadata extraction.")
+        return _EMPTY
+
     metadata_keywords = [
         ".js", ".jsx", ".ts", ".tsx", ".py", ".java", ".cpp", ".c", ".cs", ".go", ".rs", ".php",
         ".json", ".yml", ".yaml", ".md", ".html", ".css", ".env", ".sql", ".docker",
         ".png", ".jpg", ".jpeg", ".webp", ".svg",
-        "javascript", "js", "typescript", "ts", "python", "py", "java", "cpp", "c++",
-        "csharp", "c#", "golang", "go", "rust", "php", "diagram", "flowchart",
-        "path", "file", "controller", "route", "service", "model", "config", "src/", "server/", "client/", "/"
+        "javascript", "typescript", "python", "csharp", "golang", "rust",
+        "controller", "route", "service", "model", "config", "src/", "server/", "client/", "/"
     ]
-    
-    lower_q = question.lower()
+
+    # Fast-path 2: no metadata keywords present — skip Gemini call
     if not any(kw in lower_q for kw in metadata_keywords):
         print("[DEBUG] Query contains no file/language/path metadata indicators. Skipping Gemini call for metadata extraction.")
-        return {"language": None, "path": None, "source": None}
+        return _EMPTY
         
     prompt = f"""
 You are a metadata extraction system for a codebase RAG system.
@@ -70,7 +113,7 @@ Rules:
 User query:
 "{question}"
 """
-    for model_name in ["gemini-3.6-flash", "gemini-2.5-flash"]:
+    for model_name in ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash"]:
         try:
             response = client.models.generate_content(
                 model=model_name,
@@ -278,46 +321,38 @@ def enforce_source_diversity(
 
     return selected
 
-def embed_query(query: str, model: str = EMBEDDING_MODEL) -> list[float]:
-    """Embed the user's query vector using the same model as ingestion with fallback."""
-    active_model = model
-    sanitized = query if (query and query.strip()) else "codebase search query"
-    content_input = types.Content(parts=[types.Part.from_text(text=sanitized)])
-    for attempt in range(5):
-        try:
-            emb_response = client.models.embed_content(
-                model=active_model,
-                contents=content_input
-            )
-            embeddings = emb_response.embeddings
-            if isinstance(embeddings, list) and len(embeddings) > 0:
-                first = embeddings[0]
-                return first.values if hasattr(first, "values") else first
-            elif hasattr(embeddings, "values"):
-                return embeddings.values
-            return embeddings
-        except Exception as e:
-            err_str = str(e)
-            if "requests per day limit exceeded" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                if active_model == "gemini-embedding-001":
-                    print(f"[RETRIEVE WARN] Daily quota exhausted on gemini-embedding-001. Switching to gemini-embedding-2.")
-                    active_model = "gemini-embedding-2"
-                    continue
-                elif active_model == "gemini-embedding-2":
-                    print(f"[RETRIEVE WARN] Daily quota exhausted on gemini-embedding-2. Switching to gemini-embedding-2-preview fallback.")
-                    active_model = "gemini-embedding-2-preview"
-                    continue
-            if attempt == 4:
-                raise
-            time.sleep(2)
+def embed_query(query: str, model: str = None) -> list[float]:
+    """Embed the user's query using FastEmbed — same model as ingestion, local, ~20ms."""
+    sanitized = query.strip() if query and query.strip() else "codebase search query"
+    embedder = _get_retrieve_embed_model()
+    result = list(embedder.embed([sanitized]))
+    return list(result[0])
 
 def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user"):
     print(f"\n[DEBUG] === Starting Retrieval ===")
     print(f"[DEBUG] Repository: {repo_id}, User: {user_id}")
     print(f"[DEBUG] Query: \"{question}\"")
-    
-    rewritten_query = rewrite_query(question)
-    metadata = extract_metadata(question)
+
+    # -------------------------------------------------------------------
+    # Step 1: Run query rewriting AND metadata extraction IN PARALLEL
+    # Previously these ran sequentially (8–15s total). Now concurrent.
+    # -------------------------------------------------------------------
+    rewritten_query = question  # default if rewrite fails
+    metadata = {"language": None, "path": None, "source": None}
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        future_rewrite  = executor.submit(_cached_rewrite_query, question)
+        future_metadata = executor.submit(extract_metadata, question)
+
+        try:
+            rewritten_query = future_rewrite.result(timeout=10)
+        except Exception as e:
+            print(f"[WARN] Query rewriting failed (using original): {e}")
+
+        try:
+            metadata = future_metadata.result(timeout=10)
+        except Exception as e:
+            print(f"[WARN] Metadata extraction failed (continuing without): {e}")
     
     # Qdrant filter ALWAYS includes repo_id and user_id for strict isolation
     qdrant_filter = build_qdrant_filter(metadata, repo_id=repo_id, user_id=user_id)

@@ -1,0 +1,189 @@
+{
+  "timestamp": "2026-11-14T15:07:45.589058",
+  "repository": "SpandanDevOps/Airproof-x402",
+  "user_id": "samikpodder396@gmail.com",
+  "evaluation_duration_seconds": 51.86,
+  "total_questions": 1,
+  "passed_questions": 0,
+  "pass_rate_percentage": 0.0,
+  "aggregate_metrics": {
+    "average_faithfulness": 0.5,
+    "average_answer_relevancy": 0.5,
+    "average_context_precision": 0.833,
+    "average_code_grounding": 1.0,
+    "overall_composite_score": 0.583
+  },
+  "low_scoring_questions": [
+    {
+      "id": "repo_01",
+      "question": "What is the purpose of the Airproof-x402 repository and what problem does it solve?",
+      "composite": 0.583,
+      "faithfulness": 0.5,
+      "precision": 0.833
+    }
+  ],
+  "individual_results": [
+    {
+      "id": "repo_01",
+      "category": "repository_understanding",
+      "question": "What is the purpose of the Airproof-x402 repository and what problem does it solve?",
+      "reference_answer": "Airproof-x402 is an environmental attestation and sensor telemetry platform designed to monitor air quality, manage attestation policies, and verify environmental data compliance using smart contracts or backend services.",
+      "expected_files": [
+        "README.md",
+        "src/App.jsx"
+      ],
+      "retrieved_sources": [
+        "README.md",
+        "backend/otp_service.py",
+        "README.md",
+        "backend/database.py",
+        "backend/main.py",
+        "public/favicon.svg",
+        "src/pages/SettlementsPage.jsx",
+        "backend/main.py",
+        "src/pages/PolicyPage.jsx",
+        "src/pages/PolicyPage.jsx",
+        "backend/database.py",
+        "src/pages/AgentPage.jsx",
+        "backend/otp_service.py",
+        "src/App.jsx",
+        "index.html",
+        "src/pages/TelemetryPage.jsx"
+      ],
+      "retrieved_chunks_count": 16,
+      "generated_answer": "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment.",
+      "cited_sources": [
+        {
+          "source": "README.md",
+          "path": "README.md",
+          "language": "text",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "documentation",
+          "raw_url": "",
+          "filename": "README.md"
+        },
+        {
+          "source": "backend/otp_service.py",
+          "path": "backend/otp_service.py",
+          "language": "python",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "otp_service.py"
+        },
+        {
+          "source": "backend/database.py",
+          "path": "backend/database.py",
+          "language": "python",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "database.py"
+        },
+        {
+          "source": "backend/main.py",
+          "path": "backend/main.py",
+          "language": "python",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "main.py"
+        },
+        {
+          "source": "public/favicon.svg",
+          "path": "public/favicon.svg",
+          "language": "diagram",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "visual_asset",
+          "raw_url": "https://raw.githubusercontent.com/SpandanDevOps/Airproof-x402/main/public/favicon.svg",
+          "filename": "favicon.svg"
+        },
+        {
+          "source": "src/pages/SettlementsPage.jsx",
+          "path": "src/pages/SettlementsPage.jsx",
+          "language": "javascript",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "SettlementsPage.jsx"
+        },
+        {
+          "source": "src/pages/PolicyPage.jsx",
+          "path": "src/pages/PolicyPage.jsx",
+          "language": "javascript",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "PolicyPage.jsx"
+        },
+        {
+          "source": "src/pages/AgentPage.jsx",
+          "path": "src/pages/AgentPage.jsx",
+          "language": "javascript",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "AgentPage.jsx"
+        },
+        {
+          "source": "src/App.jsx",
+          "path": "src/App.jsx",
+          "language": "javascript",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "App.jsx"
+        },
+        {
+          "source": "index.html",
+          "path": "index.html",
+          "language": "text",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "index.html"
+        },
+        {
+          "source": "src/pages/TelemetryPage.jsx",
+          "path": "src/pages/TelemetryPage.jsx",
+          "language": "javascript",
+          "repo_id": "SpandanDevOps/Airproof-x402",
+          "type": "code",
+          "raw_url": "",
+          "filename": "TelemetryPage.jsx"
+        }
+      ],
+      "scores": {
+        "faithfulness": 0.5,
+        "answer_relevancy": 0.5,
+        "context_precision": 0.833,
+        "code_grounding": 1.0,
+        "composite": 0.583
+      },
+      "details": {
+        "composite_score": 0.583,
+        "faithfulness": {
+          "score": 0.5,
+          "claims": [],
+          "feedback": "Evaluation call failed; default fallback score assigned."
+        },
+        "answer_relevancy": {
+          "score": 0.5,
+          "reasoning": "Evaluation call failed; default fallback assigned."
+        },
+        "context_precision": {
+          "score": 0.833,
+          "reasoning": "Rule-based target file ranking precision.",
+          "chunk_evaluations": []
+        },
+        "code_grounding": {
+          "score": 1.0,
+          "valid_citations": [],
+          "hallucinated_citations": [],
+          "feedback": "No specific files cited."
+        }
+      },
+      "status": "NEEDS_REVIEW"
+    }
+  ]
+}

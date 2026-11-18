@@ -1,0 +1,83 @@
+{
+  "timestamp": "2026-11-14T16:17:37.492331",
+  "repository": "samik930/med_appt_booking",
+  "user_id": "samik.podder.arcade25@gmail.com",
+  "evaluation_duration_seconds": 0.2,
+  "total_questions": 3,
+  "passed_questions": 0,
+  "pass_rate_percentage": 0.0,
+  "aggregate_metrics": {
+    "average_faithfulness": 0.0,
+    "average_answer_relevancy": 0.0,
+    "average_context_precision": 0.0,
+    "average_code_grounding": 0.0,
+    "overall_composite_score": 0.0
+  },
+  "low_scoring_questions": [
+    {
+      "id": "med_db_01",
+      "question": "examine the backend folder and tell me which database is used here",
+      "composite": 0.0,
+      "faithfulness": 0.0,
+      "precision": 0.0
+    },
+    {
+      "id": "med_auth_01",
+      "question": "what type of authentication is used here? examine the backend folder and answer",
+      "composite": 0.0,
+      "faithfulness": 0.0,
+      "precision": 0.0
+    },
+    {
+      "id": "med_db_02",
+      "question": "give the code of the database configuration",
+      "composite": 0.0,
+      "faithfulness": 0.0,
+      "precision": 0.0
+    }
+  ],
+  "individual_results": [
+    {
+      "id": "med_db_01",
+      "category": "database_and_tech_stack",
+      "question": "examine the backend folder and tell me which database is used here",
+      "error": "name 'time' is not defined",
+      "status": "ERROR",
+      "scores": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "context_precision": 0.0,
+        "code_grounding": 0.0,
+        "composite": 0.0
+      }
+    },
+    {
+      "id": "med_auth_01",
+      "category": "authentication",
+      "question": "what type of authentication is used here? examine the backend folder and answer",
+      "error": "name 'time' is not defined",
+      "status": "ERROR",
+      "scores": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "context_precision": 0.0,
+        "code_grounding": 0.0,
+        "composite": 0.0
+      }
+    },
+    {
+      "id": "med_db_02",
+      "category": "database_and_tech_stack",
+      "question": "give the code of the database configuration",
+      "error": "name 'time' is not defined",
+      "status": "ERROR",
+      "scores": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0,
+        "context_precision": 0.0,
+        "code_grounding": 0.0,
+        "composite": 0.0
+      }
+    }
+  ]
+}

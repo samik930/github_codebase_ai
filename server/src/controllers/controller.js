@@ -273,13 +273,13 @@ export async function queryController(req, res) {
       `[QUERY] user=${effectiveUserId}, repo_id=${repo_id}, question="${question}"`
     );
 
-    // Call FastAPI RAG microservice with user_id & repo_id
+    // Call FastAPI RAG microservice — pipe the SSE stream straight through
     const headers = { "Content-Type": "application/json" };
     if (INTERNAL_SERVICE_SECRET) {
       headers["x-service-secret"] = INTERNAL_SERVICE_SECRET;
     }
 
-    const response = await fetch(`${FASTAPI_INTERNAL_URL}/query`, {
+    const fastapiResponse = await fetch(`${FASTAPI_INTERNAL_URL}/query`, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -289,18 +289,69 @@ export async function queryController(req, res) {
       }),
     });
 
-    if (!response.ok) {
-      const errorBody = await response.json().catch(() => ({}));
+    if (!fastapiResponse.ok) {
+      const errorBody = await fastapiResponse.json().catch(() => ({}));
       throw new Error(
-        errorBody.error || `FastAPI responded with status ${response.status}`
+        errorBody.error || `FastAPI responded with status ${fastapiResponse.status}`
       );
     }
 
-    const result = await response.json();
+    // Set SSE headers on the Express response
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
 
-    // Persist conversation turn to MongoDB for real authenticated accounts
+    // Accumulate full answer and sources so we can persist to MongoDB after streaming
+    let fullAnswer = "";
+    let sources = [];
+    let buffer = "";
+
+    const decoder = new TextDecoder();
+
+    for await (const rawChunk of fastapiResponse.body) {
+      buffer += decoder.decode(rawChunk, { stream: true });
+
+      // SSE events are separated by double newlines
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop(); // keep any incomplete event in buffer
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data: ")) continue;
+
+        const jsonStr = line.slice(6); // strip "data: "
+        let event;
+        try {
+          event = JSON.parse(jsonStr);
+        } catch {
+          continue;
+        }
+
+        if (event.type === "token") {
+          fullAnswer += event.token;
+          // Forward token to browser
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        } else if (event.type === "redacted") {
+          // Swap the full accumulated answer with the redacted version
+          fullAnswer = event.full_answer;
+        } else if (event.type === "sources") {
+          sources = event.sources || [];
+          // Forward sources to browser
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        } else if (event.type === "done") {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        } else if (event.type === "error") {
+          res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+      }
+    }
+
+    res.end();
+
+    // Persist conversation to MongoDB after stream completes
     const shouldSave = !no_save && !isDemo && Boolean(userId);
-    if (shouldSave) {
+    if (shouldSave && fullAnswer) {
       try {
         await ChatMessage.create({
           userId: effectiveUserId,
@@ -309,24 +360,19 @@ export async function queryController(req, res) {
           content: question,
           timestamp: new Date(),
         });
-
         await ChatMessage.create({
           userId: effectiveUserId,
           repoId: repo_id,
           role: "assistant",
-          content: result.answer || "No response received.",
-          sources: result.sources || [],
-          telemetry: {
-            sourcesCount: (result.sources || []).length,
-          },
+          content: fullAnswer,
+          sources,
+          telemetry: { sourcesCount: sources.length },
           timestamp: new Date(),
         });
       } catch (dbErr) {
         console.warn(`[MONGODB WARN] Could not persist chat: ${dbErr.message}`);
       }
     }
-
-    return res.json(result);
   } catch (error) {
     console.error("[ERROR] Query execution failed:", error);
     return res.status(500).json({

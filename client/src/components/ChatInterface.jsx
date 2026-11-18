@@ -87,12 +87,19 @@ export function ChatInterface({ activeRepo, repoId, user }) {
 
     const startTime = Date.now();
 
+    // Placeholder assistant message that we stream tokens into
+    const assistantId = Date.now() + 1;
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: 'assistant', content: '', sources: [], streaming: true }
+    ]);
+
     try {
       const response = await fetch('/api/query', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          question: textToSend, 
+        body: JSON.stringify({
+          question: textToSend,
           repo_id: repoId,
           no_save: Boolean(user?.isDemo),
           userId: user?.isDemo ? null : (user?.email || user?.id || null),
@@ -100,38 +107,96 @@ export function ChatInterface({ activeRepo, repoId, user }) {
         }),
       });
 
-
-      const data = await response.json();
-
-
       if (!response.ok) {
-        throw new Error(data.message || data.error || 'Failed to query server');
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.message || errData.error || 'Failed to query server');
       }
 
-      const durationMs = Date.now() - startTime;
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let finalSources = [];
 
-      const assistantMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: data.answer || "No response received.",
-        sources: data.sources || [],
-        telemetry: {
-          executionTime: `${durationMs}ms`,
-          sourcesCount: (data.sources || []).length
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE events are separated by double newlines
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop(); // keep incomplete event in buffer
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data: ')) continue;
+
+          let event;
+          try {
+            event = JSON.parse(line.slice(6));
+          } catch {
+            continue;
+          }
+
+          if (event.type === 'token') {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: m.content + event.token }
+                  : m
+              )
+            );
+          } else if (event.type === 'redacted') {
+            // Replace accumulated content with the redacted full answer
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: event.full_answer }
+                  : m
+              )
+            );
+          } else if (event.type === 'sources') {
+            finalSources = event.sources || [];
+          } else if (event.type === 'done') {
+            const durationMs = Date.now() - startTime;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? {
+                      ...m,
+                      sources: finalSources,
+                      streaming: false,
+                      telemetry: {
+                        executionTime: `${durationMs}ms`,
+                        sourcesCount: finalSources.length
+                      }
+                    }
+                  : m
+              )
+            );
+          } else if (event.type === 'error') {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, content: `⚠️ **ERROR**: ${event.error || 'Unknown error'}`, streaming: false }
+                  : m
+              )
+            );
+          }
         }
-      };
-
-      setMessages((prev) => [...prev, assistantMessage]);
+      }
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now() + 1,
-          role: 'assistant',
-          content: `⚠️ **SYSTEM ERROR**: ${err.message || 'Could not fetch response from server.'}`,
-          sources: []
-        }
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? {
+                ...m,
+                content: `⚠️ **SYSTEM ERROR**: ${err.message || 'Could not fetch response from server.'}`,
+                streaming: false
+              }
+            : m
+        )
+      );
     } finally {
       setLoading(false);
     }
@@ -227,6 +292,10 @@ export function ChatInterface({ activeRepo, repoId, user }) {
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
                   {typeof msg.content === 'string' ? msg.content : (typeof msg.content === 'object' && msg.content !== null ? JSON.stringify(msg.content, null, 2) : String(msg.content || ''))}
                 </ReactMarkdown>
+                {/* Blinking cursor while streaming */}
+                {msg.streaming && (
+                  <span style={{ display: 'inline-block', width: '2px', height: '1em', background: 'var(--accent-primary)', marginLeft: '2px', animation: 'blink 1s step-end infinite', verticalAlign: 'text-bottom' }} />
+                )}
 
                 {/* Assistant Response Telemetry Bar */}
                 {msg.role === 'assistant' && msg.telemetry && (
@@ -251,8 +320,8 @@ export function ChatInterface({ activeRepo, repoId, user }) {
           ))
         )}
 
-        {/* Loading State with Equalizer Visualizer */}
-        {loading && (
+        {/* Loading State — only shown when waiting for retrieval (before first token) */}
+        {loading && !messages.some((m) => m.streaming) && (
           <div className="message-row assistant">
             <div className="avatar assistant">
               <Bot size={18} />

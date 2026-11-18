@@ -15,7 +15,7 @@ from ingest import (
     BM25_DIR
 )
 from retrieve import retrieve_documents
-from generate import generate_answer
+from generate import generate_answer, stream_answer
 from sensitive_guard import detect_sensitive_query_intent
 
 app = FastAPI()
@@ -123,9 +123,15 @@ async def query_endpoint(request: QueryRequest):
             "sources": []
         }
     
-    # 2. Generate (with repo boundary)
-    result = generate_answer(question, documents, repo_id=repo_id)
-    return result
+    # 2. Stream answer (tokens arrive in real-time, sources sent at the end)
+    return StreamingResponse(
+        stream_answer(question, documents, repo_id=repo_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",   # Disable Nginx buffering on Render
+        }
+    )
 
 @app.post("/delete-repo")
 async def delete_repo_endpoint(req: DeleteRepoRequest):

@@ -1,0 +1,11 @@
+Turn,Question,Faithfulness,Relevancy,Grounding,Composite,Status
+1,examine the backend folder and tell me which database is used here,0.0,1.0,1.0,0.55,NEEDS_REVIEW
+2,what type of authentication is used here? examine the backend folder and answer,0.0,1.0,1.0,0.55,NEEDS_REVIEW
+3,give the code of the database configuration ,0.0,1.0,0.8,0.52,NEEDS_REVIEW
+4,what about the MAIL server MAIL port and others on the config.py,0.0,1.0,1.0,0.55,NEEDS_REVIEW
+5,what file demonstrates the main connection between the backend and the frontend?,0.14,1.0,1.0,0.613,NEEDS_REVIEW
+6,what are the security flaws present in this ,0.0,0.0,0.0,0.0,FAILED (UPSTREAM_ERROR)
+7,what are the security flaws present in this ,0.8,1.0,1.0,0.91,PASS
+8,How can i implement RAG in this ,0.0,1.0,0.4,0.46,NEEDS_REVIEW
+9,Explain the DB Schema,0.0,0.0,0.0,0.0,FAILED (UPSTREAM_ERROR)
+10,Explain the DB Schema ,0.16,1.0,0.9,0.607,NEEDS_REVIEW

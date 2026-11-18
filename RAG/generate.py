@@ -1,26 +1,41 @@
 import os
+import json
 from dotenv import load_dotenv
+from groq import Groq
 from google import genai
 from sensitive_guard import redact_sensitive_content
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+gemini_client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-def generate_answer(question: str, documents: list, repo_id: str = "") -> dict:
-    print("\n[DEBUG] --- Starting Answer Generation ---")
-    print(f"[DEBUG] Repository: {repo_id}")
-    print(f"[DEBUG] Received {len(documents)} documents for context")
+# Groq model cascade: fastest first, then fallbacks
+GROQ_MODELS = [
+    "openai/gpt-oss-20b",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
+]
 
+# Gemini fallback models (used only if ALL Groq models fail)
+GEMINI_FALLBACK_MODELS = [
+    "gemini-2.0-flash",
+    "gemini-1.5-flash",
+]
+
+
+def _build_prompt(question: str, documents: list, repo_id: str = "") -> tuple[str, list]:
+    """Build the generation prompt and deduplicated sources list."""
     context_parts = []
     has_visual_assets = False
+
     for doc in documents:
         metadata = doc.get("metadata", {})
         file_path = metadata.get("path") or metadata.get("source") or "File"
         content = doc.get("pageContent", "")
         doc_type = metadata.get("type", "code")
         language = metadata.get("language") or "text"
-        
+
         if doc_type == "visual_asset":
             has_visual_assets = True
             raw_url = metadata.get("raw_url", "")
@@ -29,16 +44,15 @@ def generate_answer(question: str, documents: list, repo_id: str = "") -> dict:
             context_parts.append(f"--- Documentation File: {file_path} ---\n{content}")
         else:
             context_parts.append(f"--- Source Code File: {file_path} (Language: {language}) ---\n{content}")
-        
+
     context = "\n\n".join(context_parts)
-    
+
     if not context.strip():
         print("[WARN] Context is empty! Gemini will report that information could not be found.")
     else:
         print(f"[DEBUG] Context Total Length: {len(context)} characters (Contains visual assets: {has_visual_assets})")
         print(f"[DEBUG] Context Snippet:\n{context[:300]}...")
 
-    # Build repository boundary instruction
     repo_boundary = ""
     if repo_id:
         repo_boundary = f"""
@@ -88,25 +102,8 @@ Question:
 
 {question}
 """
-    safe_answer = None
-    for model_name in ["gemini-3.6-flash", "gemini-2.5-flash"]:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-                config={
-                    "temperature": 0.0
-                }
-            )
-            safe_answer = redact_sensitive_content(response.text)
-            break
-        except Exception as e:
-            print(f"[WARN] Answer generation with {model_name} failed: {e}")
 
-    if not safe_answer:
-        safe_answer = "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment."
-
-    # Deduplicate sources by path and preserve visual metadata
+    # Build deduplicated sources
     unique_sources_map = {}
     for doc in documents:
         metadata = doc.get("metadata", {})
@@ -122,7 +119,126 @@ Question:
                 "filename": metadata.get("filename", os.path.basename(path_key))
             }
 
-    return {
-        "answer": safe_answer,
-        "sources": list(unique_sources_map.values())
-    }
+    return prompt, list(unique_sources_map.values())
+
+
+def stream_answer(question: str, documents: list, repo_id: str = ""):
+    """
+    Stream the generated answer token-by-token as SSE events.
+
+    Yields JSON-encoded SSE strings:
+      - {"type": "token", "token": "..."}   — one per streamed chunk
+      - {"type": "sources", "sources": [...]}  — once at the end
+      - {"type": "done"}                      — signals completion
+      - {"type": "error", "error": "..."}    — on failure
+    """
+    print("\n[DEBUG] --- Starting Streaming Answer Generation ---")
+    print(f"[DEBUG] Repository: {repo_id}")
+    print(f"[DEBUG] Received {len(documents)} documents for context")
+
+    prompt, sources = _build_prompt(question, documents, repo_id)
+
+    full_text = ""
+    success = False
+
+    for model_name in GROQ_MODELS:
+        try:
+            print(f"[DEBUG] Streaming with Groq model: {model_name}")
+            stream = groq_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=4096,
+                stream=True,
+            )
+            for chunk in stream:
+                token = chunk.choices[0].delta.content or ""
+                if token:
+                    full_text += token
+                    yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+
+            success = True
+            break
+
+        except Exception as e:
+            print(f"[WARN] Groq streaming with {model_name} failed: {e}")
+            full_text = ""
+
+    if not success:
+        # Groq exhausted — fall back to Gemini streaming
+        print("[WARN] All Groq models failed. Falling back to Gemini streaming...")
+        for gem_model in GEMINI_FALLBACK_MODELS:
+            try:
+                print(f"[DEBUG] Gemini fallback streaming: {gem_model}")
+                gem_stream = gemini_client.models.generate_content_stream(
+                    model=gem_model,
+                    contents=prompt,
+                )
+                for chunk in gem_stream:
+                    token = chunk.text or ""
+                    if token:
+                        full_text += token
+                        yield f"data: {json.dumps({'type': 'token', 'token': token})}\n\n"
+                success = True
+                break
+            except Exception as e:
+                print(f"[WARN] Gemini fallback {gem_model} failed: {e}")
+                full_text = ""
+
+    if not success:
+        error_msg = "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment."
+        yield f"data: {json.dumps({'type': 'token', 'token': error_msg})}\n\n"
+        full_text = error_msg
+
+    # Redact any secrets that slipped through in the full response
+    redacted = redact_sensitive_content(full_text)
+    if redacted != full_text:
+        # If redaction changed something, send a correction event
+        yield f"data: {json.dumps({'type': 'redacted', 'full_answer': redacted})}\n\n"
+
+    # Send sources and done signal
+    yield f"data: {json.dumps({'type': 'sources', 'sources': sources})}\n\n"
+    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+
+def generate_answer(question: str, documents: list, repo_id: str = "") -> dict:
+    """
+    Non-streaming fallback. Collects all tokens and returns a single dict.
+    Used by internal callers (e.g. evaluation runner) that don't use SSE.
+    """
+    print("\n[DEBUG] --- Starting Answer Generation (non-streaming) ---")
+    print(f"[DEBUG] Repository: {repo_id}")
+    print(f"[DEBUG] Received {len(documents)} documents for context")
+
+    prompt, sources = _build_prompt(question, documents, repo_id)
+
+    safe_answer = None
+    for model_name in GROQ_MODELS:
+        try:
+            response = groq_client.chat.completions.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=4096,
+                stream=False,
+            )
+            safe_answer = redact_sensitive_content(response.choices[0].message.content)
+            break
+        except Exception as e:
+            print(f"[WARN] Groq answer generation with {model_name} failed: {e}")
+
+    if not safe_answer:
+        # Groq exhausted — fall back to Gemini non-streaming
+        print("[WARN] All Groq models failed. Falling back to Gemini non-streaming...")
+        for gem_model in GEMINI_FALLBACK_MODELS:
+            try:
+                resp = gemini_client.models.generate_content(model=gem_model, contents=prompt)
+                safe_answer = redact_sensitive_content(resp.text)
+                break
+            except Exception as e:
+                print(f"[WARN] Gemini fallback {gem_model} failed: {e}")
+
+    if not safe_answer:
+        safe_answer = "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment."
+
+    return {"answer": safe_answer, "sources": sources}

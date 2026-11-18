@@ -6,8 +6,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from google import genai
-from google.genai import types
+from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
 
@@ -18,16 +17,25 @@ from langchain_core.documents import Document
 
 load_dotenv()
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
-
 COLLECTION = "codebase_documents"
-VECTOR_SIZE = 3072
+# FastEmbed BAAI/bge-small-en-v1.5 produces 384-dim vectors
+FASTEMBED_MODEL = os.getenv("FASTEMBED_MODEL", "BAAI/bge-small-en-v1.5")
+VECTOR_SIZE = 384
 BM25_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-# Optimized batch and model configuration
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-2")
 BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "50"))
 MAX_RETRIES = int(os.getenv("MAX_RETRY_ATTEMPTS", "7"))
+
+# Lazy-loaded singleton — model downloads on first use (~50MB, cached after that)
+_fastembed_model: TextEmbedding | None = None
+
+def _get_embed_model() -> TextEmbedding:
+    global _fastembed_model
+    if _fastembed_model is None:
+        print(f"[EMBED] Loading FastEmbed model: {FASTEMBED_MODEL}")
+        _fastembed_model = TextEmbedding(model_name=FASTEMBED_MODEL)
+        print("[EMBED] FastEmbed model loaded.")
+    return _fastembed_model
 
 # Thread-safe cancellation registry for active repository ingestions
 _cancellation_lock = threading.Lock()
@@ -107,104 +115,19 @@ def get_language(path):
     }.get(os.path.splitext(path)[1].lower(), "text")
 
 
-def embed_single(text: str, model: str = EMBEDDING_MODEL) -> list[float]:
-    """Fallback single text embedder."""
-    sanitized = text if (text and text.strip()) else " "
-    content = types.Content(parts=[types.Part.from_text(text=sanitized)])
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = client.models.embed_content(model=model, contents=content)
-            embs = resp.embeddings
-            first = embs[0] if isinstance(embs, list) and len(embs) > 0 else embs
-            return first.values if hasattr(first, "values") else first
-        except Exception as e:
-            if attempt == MAX_RETRIES - 1:
-                raise
-            time.sleep(1.5 * (1.5 ** attempt))
+def embed_single(text: str, model: str = None) -> list[float]:
+    """Single text embed using FastEmbed — local, ~20ms, no API quota."""
+    return embed_batch([text])[0]
 
 
-def embed_batch(texts: list[str], model: str = EMBEDDING_MODEL) -> list[list[float]]:
-    """
-    Batch-embeds a list of texts using Gemini.
-    For multimodal models like gemini-embedding-2, wraps each text in types.Content
-    to guarantee a 1:1 embedding for each input chunk.
-    If the API aggregates them, automatically falls back to concurrent worker embedding.
-    """
+def embed_batch(texts: list[str], model: str = None) -> list[list[float]]:
+    """Batch embed using FastEmbed — local, ~20ms, no API quota."""
     if not texts:
         return []
-
-    # Clean whitespace-only or empty texts to prevent Gemini 400 INVALID_ARGUMENT (empty Part)
-    sanitized_texts = [t if (t and t.strip()) else " " for t in texts]
-
-    # Explicit Content wrapping so gemini-embedding-2 produces N individual embeddings
-    content_inputs = [
-        types.Content(parts=[types.Part.from_text(text=t)])
-        for t in sanitized_texts
-    ]
-
-    active_model = model
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = client.models.embed_content(
-                model=active_model,
-                contents=content_inputs
-            )
-            if hasattr(response, "embeddings") and response.embeddings:
-                embs = [
-                    e.values if hasattr(e, "values") else e
-                    for e in response.embeddings
-                ]
-                if len(embs) == len(texts):
-                    return embs
-                
-                # If multimodal API merged parts into a single embedding, fallback to concurrent embedding
-                print(f"[EMBED WARN] Batch embed returned {len(embs)} embeddings for {len(texts)} chunks. Running concurrent embedding fallback.")
-                with ThreadPoolExecutor(max_workers=min(10, len(sanitized_texts))) as pool:
-                    results = list(pool.map(lambda t: embed_single(t, active_model), sanitized_texts))
-                return results
-
-            raise ValueError("No embeddings returned by Gemini API")
-
-        except Exception as e:
-            err_str = str(e)
-            print(f"[EMBED WARN] Batch embed ({len(texts)} chunks) failed on {active_model} (attempt {attempt + 1}/{MAX_RETRIES}): {err_str}")
-
-            # Automatic quota failover
-            if "requests per day limit exceeded" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                if active_model == "gemini-embedding-001":
-                    print(f"[EMBED WARN] Daily quota exhausted on gemini-embedding-001. Switching to gemini-embedding-2.")
-                    active_model = "gemini-embedding-2"
-                    continue
-                elif active_model == "gemini-embedding-2":
-                    #print(f"[EMBED WARN] Daily quota exhausted on gemini-embedding-2. Switching to gemini-embedding-2-preview fallback.")
-                    #active_model = "gemini-embedding-2-preview"
-                    continue
-
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "503" in err_str or "UNAVAILABLE" in err_str or "500" in err_str:
-                if attempt == MAX_RETRIES - 1:
-                    # Final attempt: fall back to concurrent worker embedding before giving up
-                    try:
-                        print(f"[EMBED WARN] Final fallback to concurrent worker embedding for {len(texts)} chunks...")
-                        with ThreadPoolExecutor(max_workers=min(5, len(sanitized_texts))) as pool:
-                            return list(pool.map(lambda t: embed_single(t, active_model), sanitized_texts))
-                    except Exception:
-                        raise Exception(f"Failed to embed batch after {MAX_RETRIES} attempts: {err_str}")
-
-                # Check if API returned specific retryDelay
-                delay = 4.0 * (1.5 ** attempt)
-                match = re.search(r"retry\s+in\s+([\d.]+)\s*s", err_str, re.IGNORECASE)
-                if match:
-                    delay = float(match.group(1)) + 1.0
-                else:
-                    match_delay = re.search(r"retryDelay':\s*'(\d+)s'", err_str)
-                    if match_delay:
-                        delay = float(match_delay.group(1)) + 1.0
-
-                delay = min(60.0, max(2.0, delay))
-                print(f"[EMBED] Rate limited or server busy. Waiting {delay:.1f}s before retry...")
-                time.sleep(delay)
-            else:
-                raise
+    sanitized = [t if (t and t.strip()) else " " for t in texts]
+    embedder = _get_embed_model()
+    embeddings = list(embedder.embed(sanitized))
+    return [list(e) for e in embeddings]
 
 
 def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: list = None, user_id: str = "default_user", branch: str = "main"):
@@ -371,8 +294,17 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
         try:
             existing_collections = [c.name for c in qdrant.get_collections().collections]
 
+            if COLLECTION in existing_collections:
+                # Auto-detect vector size mismatch (e.g. old 3072-dim Gemini vs new 384-dim FastEmbed)
+                info = qdrant.get_collection(COLLECTION)
+                current_size = info.config.params.vectors.size
+                if current_size != VECTOR_SIZE:
+                    print(f"[INGEST] Vector size mismatch: collection has {current_size}-dim, need {VECTOR_SIZE}-dim. Recreating collection...")
+                    qdrant.delete_collection(COLLECTION)
+                    existing_collections = []  # fall through to create below
+
             if COLLECTION not in existing_collections:
-                print(f"[INGEST] Creating new Qdrant collection: {COLLECTION}")
+                print(f"[INGEST] Creating new Qdrant collection: {COLLECTION} (size={VECTOR_SIZE})")
                 qdrant.create_collection(
                     collection_name=COLLECTION,
                     vectors_config=VectorParams(
@@ -424,7 +356,7 @@ def ingest_documents(files, repo_id: str, commit_hash: str = "", visual_files: l
 
     # 6. High-speed batch embedding and Qdrant batch upsert with immediate cancellation checks
     total_chunks = len(all_chunks)
-    print(f"[INGEST] Indexing {total_chunks} chunks in batches of {BATCH_SIZE} using model '{EMBEDDING_MODEL}'...")
+    print(f"[INGEST] Indexing {total_chunks} chunks in batches of {BATCH_SIZE} using FastEmbed ({FASTEMBED_MODEL})...")
 
     for i in range(0, total_chunks, BATCH_SIZE):
         # CRITICAL: Check if repository was purged or cancelled before starting next batch

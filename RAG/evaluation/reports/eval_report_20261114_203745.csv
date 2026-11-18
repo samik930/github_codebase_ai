@@ -1,0 +1,2 @@
+ID,Category,Question,Faithfulness,Relevancy,Precision,Code Grounding,Composite,Status
+repo_01,repository_understanding,What is the purpose of the Airproof-x402 repository and what,0.5,0.5,0.833,1.0,0.583,NEEDS_REVIEW
