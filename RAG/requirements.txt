@@ -8,4 +8,8 @@ fastapi
 uvicorn
 fastembed
 groq
+<<<<<<< HEAD
 redis>=5.0,<7.0
+=======
+redis
+>>>>>>> de0500e

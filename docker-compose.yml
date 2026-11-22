@@ -65,8 +65,12 @@ services:
     env_file:
       - ./RAG/.env
     environment:
+<<<<<<< HEAD
       - REDIS_HOST=redis
       - REDIS_PORT=6379
+=======
+      - REDIS_URL=${REDIS_URL:-rediss://default:gQAAAAAAAj8yAAIgcDFlZDA1NmQ3NTNjYzU0NjY0YTAyMmVmOGNiNzlkYjdmZA@included-oarfish-147250.upstash.io:6379}
+>>>>>>> de0500e
       - EMBEDDING_CACHE_TTL_SECONDS=604800
     volumes:
       - ./RAG:/app
@@ -103,6 +107,4 @@ services:
 
 volumes:
   qdrant_storage:
-  redis_data:
-
   redis_data:

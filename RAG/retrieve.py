@@ -11,6 +11,15 @@ from qdrant_client.http import models as qmodels
 from bm25 import load_bm25_index, search_bm25
 from query_rewriter import rewrite_query
 from ingest import get_bm25_path
+from redis_cache import (
+    get_cached_query_embedding,
+    set_cached_query_embedding,
+    get_query_embedding_cache_key,
+    normalize_query,
+    EXPECTED_EMBEDDING_DIM,
+    get_cached_retrieval_results,
+    set_cached_retrieval_results,
+)
 
 load_dotenv()
 
@@ -356,6 +365,7 @@ def _get_embedding_cache():
 
 
 def embed_query(query: str, model: str = None) -> list[float]:
+<<<<<<< HEAD
     """Embed with the same FastEmbed model as ingestion; cache vectors in Redis."""
     sanitized = query.strip() if query and query.strip() else "codebase search query"
 
@@ -392,6 +402,32 @@ def embed_query(query: str, model: str = None) -> list[float]:
         print(f"[CACHE WARN] Redis write failed; returning computed embedding: {e}")
 
     return vector
+=======
+    """
+    Embed the user's query with Redis caching.
+    - Checks Redis cache first (exact match by version, model, and SHA-256 of case-preserved normalized query).
+    - On cache miss: computes embedding using FastEmbed (local, 384-dim, ~20ms).
+    - Caches embedding in Redis with TTL (default 7 days).
+    - On Redis failure: falls back gracefully to FastEmbed without interrupting retrieval.
+    """
+    model_name = model or FASTEMBED_MODEL
+    sanitized = normalize_query(query)
+
+    # 1. Check Redis cache
+    cached = get_cached_query_embedding(sanitized, model_name)
+    if cached is not None:
+        return cached
+
+    # 2. Compute embedding with FastEmbed
+    embedder = _get_retrieve_embed_model()
+    result = list(embedder.embed([sanitized]))
+    embedding = [float(x) for x in result[0]]
+
+    # 3. Store in Redis cache (graceful on failure)
+    set_cached_query_embedding(sanitized, model_name, embedding)
+
+    return embedding
+>>>>>>> de0500e
 
 def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user"):
     print(f"\n[DEBUG] === Starting Retrieval ===")
@@ -428,7 +464,26 @@ def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user
     if not os.path.exists(bm25_path):
         print(f"[ERROR] BM25 index not found for repo: {repo_id} (user: {user_id}) at {bm25_path}")
         raise FileNotFoundError(f"Repository '{repo_id}' is not indexed for this user. BM25 index not found.")
-    
+
+    # -------------------------------------------------------------------
+    # Step 2: Check retrieval cache BEFORE running Qdrant + BM25
+    # Cache key encodes: user, repo, BM25 mtime (auto-invalidates on
+    # re-index), query, retrieval config, and metadata filter.
+    # -------------------------------------------------------------------
+    cached_docs = get_cached_retrieval_results(
+        query=rewritten_query,
+        repo_id=repo_id,
+        user_id=user_id,
+        bm25_path=bm25_path,
+        metadata=metadata,
+    )
+    if cached_docs is not None:
+        print(f"[DEBUG] Served {len(cached_docs)} docs from retrieval cache (skipped Qdrant + BM25).")
+        return cached_docs
+
+    # -------------------------------------------------------------------
+    # Step 3: Cache miss — run full hybrid retrieval
+    # -------------------------------------------------------------------
     bm25_index = load_bm25_index(bm25_path)
     
     # Query Vector Embedding with fallback support
@@ -535,5 +590,17 @@ def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user
             print(f"  Raw URL: {meta.get('raw_url')}")
         safe_preview = content[:150].encode('ascii', errors='replace').decode('ascii').replace('\n', ' ')
         print(f"  Preview: {safe_preview}...")
-        
+
+    # -------------------------------------------------------------------
+    # Step 4: Cache the final ranked results for future identical requests
+    # -------------------------------------------------------------------
+    set_cached_retrieval_results(
+        query=rewritten_query,
+        repo_id=repo_id,
+        user_id=user_id,
+        bm25_path=bm25_path,
+        results=documents,
+        metadata=metadata,
+    )
+
     return documents
