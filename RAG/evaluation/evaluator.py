@@ -293,6 +293,64 @@ Return JSON:
     }
 
 
+def evaluate_context_recall(question: str, contexts: list[str], reference_answer: str) -> dict:
+    """
+    Evaluates Context Recall: does the retrieved context contain all the information
+    needed to produce the reference answer?
+    Score = fraction of statements in reference_answer that are covered by the contexts.
+    """
+    if not reference_answer or not reference_answer.strip():
+        return {"score": None, "reasoning": "No reference answer provided — context recall not applicable."}
+    if not contexts:
+        return {"score": 0.0, "reasoning": "No contexts retrieved.", "covered_statements": [], "missing_statements": []}
+
+    context_str = "\n\n---\n\n".join(contexts[:10])
+
+    prompt = f"""
+You are an expert AI evaluator assessing CONTEXT RECALL for a codebase RAG system.
+Context Recall measures whether the retrieved code snippets contain all the information
+needed to construct the reference answer.
+
+User Question:
+\"{question}\"
+
+Reference Answer (ground truth):
+\"\"\"
+{reference_answer}
+\"\"\"
+
+Retrieved Contexts:
+\"\"\"
+{context_str}
+\"\"\"
+
+Instructions:
+1. Break the reference answer into individual atomic statements or facts.
+2. For each statement, determine whether the retrieved contexts COVER it (the info is present) or MISS it.
+3. Compute score = covered_count / total_statements. If reference has no statements, return 1.0.
+
+Return JSON in this exact structure:
+{{
+  "score": 0.85,
+  "reasoning": "Brief explanation.",
+  "covered_statements": ["...", "..."],
+  "missing_statements": ["..."]
+}}
+"""
+    result = _call_gemini_json(prompt)
+    if not result:
+        return {"score": 0.5, "reasoning": "Evaluation call failed; fallback score assigned.",
+                "covered_statements": [], "missing_statements": []}
+
+    score = float(result.get("score", 0.0))
+    return {
+        "score": max(0.0, min(1.0, score)),
+        "reasoning": result.get("reasoning", ""),
+        "covered_statements": result.get("covered_statements", []),
+        "missing_statements": result.get("missing_statements", []),
+    }
+
+
 def evaluate_sample(question: str, answer: str, retrieved_docs: list[dict], reference_answer: str = "", expected_files: list[str] = None) -> dict:
     """
     Runs complete evaluation suite on a single RAG generation instance:

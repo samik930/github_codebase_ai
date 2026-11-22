@@ -454,6 +454,13 @@ def delete_repository_vectors(repo_id: str, user_id: str = "default_user") -> bo
     # 1. Immediately signal any running ingestion threads for this repo to stop
     cancel_ingestion(repo_id, user_id)
 
+    # 2. Invalidate retrieval cache so stale results cannot be served after re-index/delete
+    try:
+        from redis_cache import invalidate_retrieval_cache
+        invalidate_retrieval_cache(repo_id, user_id)
+    except Exception as e:
+        print(f"[CLEANUP WARN] Retrieval cache invalidation failed (non-fatal): {e}")
+
     # 2. Delete points from Qdrant
     try:
         qdrant = QdrantClient(
