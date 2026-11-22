@@ -2,6 +2,7 @@ import os
 import json
 import time
 import hashlib
+import redis
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 from fastembed import TextEmbedding
@@ -321,12 +322,76 @@ def enforce_source_diversity(
 
     return selected
 
+# ---------------------------------------------------------------------------
+# Redis cache for query embeddings
+# Shared across FastAPI processes/containers; query vectors are repo-independent.
+# ---------------------------------------------------------------------------
+_embedding_cache = None
+EMBEDDING_CACHE_TTL = int(os.getenv("EMBEDDING_CACHE_TTL_SECONDS", "604800"))  # 7 days
+EMBEDDING_CACHE_PREFIX = "codebase:query-embedding:v1"
+
+
+def _get_embedding_cache():
+    """Create the Redis client lazily so retrieval still works if Redis is unavailable."""
+    global _embedding_cache
+    if _embedding_cache is None:
+        redis_url = os.getenv("REDIS_URL")
+        if redis_url:
+            _embedding_cache = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+            )
+        else:
+            _embedding_cache = redis.Redis(
+                host=os.getenv("REDIS_HOST", "localhost"),
+                port=int(os.getenv("REDIS_PORT", "6379")),
+                password=os.getenv("REDIS_PASSWORD") or None,
+                decode_responses=True,
+                socket_connect_timeout=1,
+                socket_timeout=1,
+            )
+    return _embedding_cache
+
+
 def embed_query(query: str, model: str = None) -> list[float]:
-    """Embed the user's query using FastEmbed — same model as ingestion, local, ~20ms."""
+    """Embed with the same FastEmbed model as ingestion; cache vectors in Redis."""
     sanitized = query.strip() if query and query.strip() else "codebase search query"
+
+    # Include the model and exact normalized input in the key. Do not lowercase:
+    # code identifiers can be case-sensitive.
+    cache_digest = hashlib.sha256(
+        f"{FASTEMBED_MODEL}:{sanitized}".encode("utf-8")
+    ).hexdigest()
+    cache_key = f"{EMBEDDING_CACHE_PREFIX}:{FASTEMBED_MODEL}:{cache_digest}"
+
+    try:
+        cached = _get_embedding_cache().get(cache_key)
+        if cached:
+            vector = json.loads(cached)
+            if isinstance(vector, list) and len(vector) == 384:
+                print("[CACHE] Query embedding hit")
+                return [float(value) for value in vector]
+            print("[CACHE] Invalid query embedding entry; recomputing")
+    except Exception as e:
+        print(f"[CACHE WARN] Redis read failed; computing embedding: {e}")
+
     embedder = _get_retrieve_embed_model()
     result = list(embedder.embed([sanitized]))
-    return list(result[0])
+    vector = [float(value) for value in result[0]]
+
+    try:
+        _get_embedding_cache().setex(
+            cache_key,
+            EMBEDDING_CACHE_TTL,
+            json.dumps(vector, separators=(",", ":")),
+        )
+        print("[CACHE] Query embedding stored")
+    except Exception as e:
+        print(f"[CACHE WARN] Redis write failed; returning computed embedding: {e}")
+
+    return vector
 
 def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user"):
     print(f"\n[DEBUG] === Starting Retrieval ===")
