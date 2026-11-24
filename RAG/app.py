@@ -17,6 +17,7 @@ from ingest import (
 from retrieve import retrieve_documents
 from generate import generate_answer, stream_answer
 from sensitive_guard import detect_sensitive_query_intent
+from evaluation.live_eval import schedule_live_ragas_eval, load_live_metrics
 
 app = FastAPI()
 
@@ -124,14 +125,46 @@ async def query_endpoint(request: QueryRequest):
         }
     
     # 2. Stream answer (tokens arrive in real-time, sources sent at the end)
+    #    and schedule concurrent background RAGAS evaluation for this repo.
+    def stream_with_live_eval():
+        collected_tokens = []
+        final_answer_override = None
+
+        for sse_chunk in stream_answer(question, documents, repo_id=repo_id):
+            yield sse_chunk
+            if sse_chunk.startswith("data: "):
+                try:
+                    payload = json.loads(sse_chunk[6:].strip())
+                    ev_type = payload.get("type")
+                    if ev_type == "token":
+                        collected_tokens.append(payload.get("token", ""))
+                    elif ev_type == "redacted":
+                        final_answer_override = payload.get("full_answer", "")
+                except Exception:
+                    pass
+
+        full_answer = final_answer_override if final_answer_override is not None else "".join(collected_tokens)
+        schedule_live_ragas_eval(
+            question=question,
+            answer=full_answer,
+            documents=documents,
+            repo_id=repo_id,
+            user_id=user_id,
+        )
+
     return StreamingResponse(
-        stream_answer(question, documents, repo_id=repo_id),
+        stream_with_live_eval(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",   # Disable Nginx buffering on Render
         }
     )
+
+@app.get("/eval-metrics")
+async def get_eval_metrics(repo_id: str | None = None):
+    """Return stored live RAGAS metrics for a specific repo_id, or all repos if omitted."""
+    return load_live_metrics(repo_id=repo_id)
 
 @app.post("/delete-repo")
 async def delete_repo_endpoint(req: DeleteRepoRequest):

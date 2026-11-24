@@ -357,13 +357,15 @@ def evaluate_sample(question: str, answer: str, retrieved_docs: list[dict], refe
     1. Faithfulness
     2. Answer Relevancy
     3. Context Precision
-    4. Code Grounding
+    4. Context Recall
+    5. Code Grounding
     """
     context_texts = [d.get("pageContent", "") for d in retrieved_docs]
 
     faith_res = evaluate_faithfulness(question, context_texts, answer)
     relev_res = evaluate_answer_relevancy(question, answer)
     prec_res = evaluate_context_precision(question, retrieved_docs, reference_answer, expected_files)
+    recall_res = evaluate_context_recall(question, context_texts, reference_answer)
     ground_res = evaluate_code_grounding(answer, retrieved_docs)
 
     # Composite RAG Score (weighted average: 40% Faithfulness, 35% Relevancy, 25% Context Precision)
@@ -374,5 +376,6 @@ def evaluate_sample(question: str, answer: str, retrieved_docs: list[dict], refe
         "faithfulness": faith_res,
         "answer_relevancy": relev_res,
         "context_precision": prec_res,
+        "context_recall": recall_res,
         "code_grounding": ground_res
     }

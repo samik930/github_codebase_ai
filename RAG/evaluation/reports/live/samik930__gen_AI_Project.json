@@ -1,0 +1,91 @@
+{
+  "repo_id": "samik930/gen_AI_Project",
+  "updated_at": "2026-11-24T21:57:20.104313+00:00",
+  "total_evaluated_queries": 3,
+  "aggregate_ragas_scores": {
+    "answer_relevancy": 0.744,
+    "faithfulness": null
+  },
+  "history": [
+    {
+      "timestamp": "2026-11-24T21:52:35.032206+00:00",
+      "user_id": "samikpodder396@gmail.com",
+      "question": "What does this codebase do?",
+      "answer_preview": "**Overview**\n\nThe repository is a **full\u2011stack web application that lets a user generate an AI\u2011driven interview plan and then run a mock interview against that plan.**  \nThe backend (Node/Express + MongoDB) creates the interview content and evaluates the user\u2019s answers with Google Gemini.  \nThe fron",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "Backend/src/services/mockInterview.service.js",
+        "Frontend/src/features/interview/pages/Interview.jsx",
+        "Backend/package.json",
+        "Frontend/README.md",
+        "Backend/src/services/ai.service.js",
+        "Backend/src/controllers/mockInterview.controller.js",
+        "Backend/src/models/user.model.js",
+        "Frontend/package.json",
+        "Frontend/src/features/interview/style/interview.scss",
+        "Backend/ex.js",
+        "Backend/src/controllers/auth.controller.js",
+        "Frontend/src/features/interview/hooks/useInterview.js",
+        "Backend/src/models/mockInterview.model.js"
+      ],
+      "ragas_status": "failed",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null
+      },
+      "error": "All RAGAS metric jobs returned NaN (check evaluator LLM/API access)."
+    },
+    {
+      "timestamp": "2026-11-24T21:54:35.970196+00:00",
+      "user_id": "samikpodder396@gmail.com",
+      "question": "what the AI actually does in this ",
+      "answer_preview": "**What the AI component actually does**\n\nThe AI part of the project is a single service (`Backend/src/services/ai.service.js`) that talks to Google\u2019s GenAI (Gemini Flash) and turns a user\u2019s resume, a self\u2011description and a job description into a *structured interview report*.  \nBelow is a step\u2011by\u2011st",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "Backend/src/services/temp.js",
+        "Frontend/src/features/interview/services/mockInterviewApi.js",
+        "Frontend/public/icons.svg",
+        "Backend/src/services/ai.service.js",
+        "README.md",
+        "Backend/test.js",
+        "Frontend/src/features/interview/pages/MockInterview.jsx",
+        "Frontend/README.md",
+        "Frontend/src/features/interview/pages/Home.jsx",
+        "Frontend/public/favicon.svg",
+        "Backend/src/models/blacklist.model.js"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.8169
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:57:20.104313+00:00",
+      "user_id": "samikpodder396@gmail.com",
+      "question": "i jjst want to see what prompt has been used to generate this output",
+      "answer_preview": "The interview\u2011report is produced by the **`generateInterviewReport`** function in  \n`Backend/src/services/ai.service.js`.  \nThe function builds a single prompt string that is sent to Gemini.  \nBelow is the exact prompt that is used (the `${\u2026}` parts are replaced with the\ncandidate\u2019s resume, self\u2011des",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "Backend/src/services/ai.service.js",
+        "Frontend/src/features/interview/pages/Home.jsx",
+        "Backend/src/services/mockInterview.service.js",
+        "Backend/src/controllers/mockInterview.controller.js",
+        "Frontend/src/features/interview/pages/MockInterview.jsx",
+        "Frontend/src/features/interview/hooks/useInterview.js",
+        "Frontend/README.md",
+        "Backend/src/services/temp.js",
+        "Frontend/src/features/interview/pages/Interview.jsx",
+        "Backend/ex.js",
+        "README.md"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.671
+      },
+      "error": null
+    }
+  ]
+}

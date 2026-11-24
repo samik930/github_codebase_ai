@@ -43,7 +43,7 @@ def _build_ragas_llm():
     try:
         if provider == "groq":
             from langchain_groq import ChatGroq  # noqa: PLC0415
-            model = os.getenv("EVAL_LLM_MODEL", "llama3-8b-8192")
+            model = os.getenv("EVAL_LLM_MODEL", "openai/gpt-oss-20b")
             api_key = os.getenv("GROQ_API_KEY")
             if not api_key:
                 raise ValueError("GROQ_API_KEY is not set.")
@@ -78,18 +78,32 @@ def _build_ragas_llm():
 
 def _build_ragas_embeddings():
     """
-    Build a BaseRagasEmbeddings instance.
-    Falls back gracefully if unavailable.
+    Build a BaseRagasEmbeddings instance using the locally cached FastEmbed model
+    (BAAI/bge-small-en-v1.5) for accurate AnswerRelevancy cosine similarity,
+    falling back to FakeEmbeddings if unavailable.
     """
     try:
         from ragas.embeddings import LangchainEmbeddingsWrapper  # noqa: PLC0415
-        from langchain_community.embeddings import FakeEmbeddings  # noqa: PLC0415
-        # Use a lightweight embedding model; FakeEmbeddings avoids network calls
-        # but gives low-quality scores. For better quality, substitute with
-        # langchain_openai.OpenAIEmbeddings or langchain_google_genai.GoogleGenerativeAIEmbeddings.
-        fake = FakeEmbeddings(size=384)
-        logger.info("[ragas_eval] Using FakeEmbeddings for RAGAS (scores may be approximate).")
-        return LangchainEmbeddingsWrapper(fake)
+        try:
+            from langchain_core.embeddings import Embeddings  # noqa: PLC0415
+            from fastembed import TextEmbedding  # noqa: PLC0415
+
+            class _FastEmbedLangchain(Embeddings):
+                def __init__(self):
+                    self._model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+
+                def embed_documents(self, texts: list[str]) -> list[list[float]]:
+                    return [v.tolist() for v in self._model.embed(texts)]
+
+                def embed_query(self, text: str) -> list[float]:
+                    return next(iter(self._model.embed([text]))).tolist()
+
+            logger.info("[ragas_eval] Using FastEmbed (BAAI/bge-small-en-v1.5) for RAGAS embeddings.")
+            return LangchainEmbeddingsWrapper(_FastEmbedLangchain())
+        except Exception as fe_err:
+            logger.warning("[ragas_eval] FastEmbed unavailable (%s), falling back to FakeEmbeddings.", fe_err)
+            from langchain_community.embeddings import FakeEmbeddings  # noqa: PLC0415
+            return LangchainEmbeddingsWrapper(FakeEmbeddings(size=384))
     except Exception as e:
         logger.warning("[ragas_eval] Could not build RAGAS embeddings: %s", e)
         return None
@@ -102,6 +116,7 @@ def _build_ragas_embeddings():
 def evaluate_with_ragas(
     samples: list[dict[str, Any]],
     metrics: list | None = None,
+    reference_free: bool = False,
 ) -> dict[str, Any]:
     """
     Run RAGAS evaluation over a list of samples.
@@ -110,12 +125,15 @@ def evaluate_with_ragas(
         user_input         (str)   — the user's question
         response           (str)   — the generated answer
         retrieved_contexts (list[str]) — the retrieved context strings
-        reference          (str)   — the reference/ground-truth answer
+        reference          (str)   — the reference/ground-truth answer (optional if reference_free=True)
 
     Args:
         samples: List of sample dicts as described above.
         metrics: Optional list of ragas Metric instances. Defaults to
-                 [Faithfulness, AnswerRelevancy, ContextPrecision, ContextRecall].
+                 [Faithfulness, AnswerRelevancy, ContextPrecision, ContextRecall],
+                 or [Faithfulness, AnswerRelevancy] when reference_free=True.
+        reference_free: If True, only run metrics that do not require a ground-truth
+                        reference answer (Faithfulness and AnswerRelevancy).
 
     Returns:
         {
@@ -129,6 +147,13 @@ def evaluate_with_ragas(
     # Lazy imports — RAGAS is optional; if unavailable, return gracefully
     # -------------------------------------------------------------------
     try:
+        import sys  # noqa: PLC0415
+        if sys.version_info >= (3, 14):
+            # ragas 0.2.x calls nest_asyncio.apply(), which breaks asyncio.wait_for()
+            # on Python 3.14 ("Timeout should be used inside a task").
+            import nest_asyncio  # noqa: PLC0415
+            nest_asyncio.apply = lambda *args, **kwargs: None
+
         from ragas import evaluate as ragas_evaluate  # noqa: PLC0415
         from ragas.dataset_schema import EvaluationDataset, SingleTurnSample  # noqa: PLC0415
         from ragas.metrics import (  # noqa: PLC0415
@@ -168,12 +193,18 @@ def evaluate_with_ragas(
     # Build metric instances
     # -------------------------------------------------------------------
     if metrics is None:
-        metric_instances = [
-            Faithfulness(llm=ragas_llm),
-            AnswerRelevancy(llm=ragas_llm, embeddings=ragas_emb),
-            ContextPrecision(llm=ragas_llm),
-            ContextRecall(llm=ragas_llm),
-        ]
+        if reference_free:
+            metric_instances = [
+                Faithfulness(llm=ragas_llm),
+                AnswerRelevancy(llm=ragas_llm, embeddings=ragas_emb),
+            ]
+        else:
+            metric_instances = [
+                Faithfulness(llm=ragas_llm),
+                AnswerRelevancy(llm=ragas_llm, embeddings=ragas_emb),
+                ContextPrecision(llm=ragas_llm),
+                ContextRecall(llm=ragas_llm),
+            ]
     else:
         metric_instances = metrics
 
@@ -208,9 +239,11 @@ def evaluate_with_ragas(
     # Run evaluation
     # -------------------------------------------------------------------
     try:
+        from ragas.run_config import RunConfig  # noqa: PLC0415
         result = ragas_evaluate(
             dataset=dataset,
             metrics=metric_instances,
+            run_config=RunConfig(max_workers=1, max_retries=3, timeout=120),
             raise_exceptions=False,
             show_progress=True,
         )
@@ -245,11 +278,12 @@ def evaluate_with_ragas(
             valid_vals = [ps[col] for ps in per_sample if ps[col] is not None]
             aggregate[col] = round(sum(valid_vals) / len(valid_vals), 4) if valid_vals else None
 
+        has_any_score = any(v is not None for v in aggregate.values())
         return {
-            "status": "ok",
+            "status": "ok" if has_any_score else "failed",
             "aggregate": aggregate,
             "per_sample": per_sample,
-            "error": None,
+            "error": None if has_any_score else "All RAGAS metric jobs returned NaN (check evaluator LLM/API access).",
         }
 
     except Exception as e:

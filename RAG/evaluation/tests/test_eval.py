@@ -492,7 +492,7 @@ class TestCodeSpecificMetricsExplicit:
             "reference_contexts": [
                 "def verify_token(token):\n    payload = jwt.decode(token, SECRET_KEY)\n    return payload"
             ],
-            "expected_line_ranges": [],
+            "expected_line_ranges": [[1, 3]],
         }
         scores = compute_code_specific_scores(self.DOCS, sample, k=5)
         assert scores["file_recall"]["score"] == pytest.approx(1.0)
@@ -501,3 +501,46 @@ class TestCodeSpecificMetricsExplicit:
         assert scores["chunk_recall"]["score"] is not None
         # line_coverage should be metadata_missing because file_contents=None in compute helper
         assert scores["line_coverage"]["metadata_missing"] is True
+
+
+# ===========================================================================
+# Scenario 10 — Live per-repo RAGAS evaluation & persistence
+# ===========================================================================
+
+class TestLiveRepoEvaluation:
+    """Scenario 10: Live background RAGAS evaluator stores per-repo metrics safely."""
+
+    def test_evaluate_and_store_live_persists_per_repo(self, tmp_path, monkeypatch):
+        from evaluation import live_eval
+
+        monkeypatch.setattr(live_eval, "LIVE_REPORTS_DIR", str(tmp_path))
+        monkeypatch.setenv("LIVE_EVAL_DELAY_SECONDS", "0")
+        monkeypatch.setattr(
+            "evaluation.ragas_evaluator.evaluate_with_ragas",
+            lambda samples, reference_free=False: {
+                "status": "ok",
+                "aggregate": {"faithfulness": 0.9, "answer_relevancy": 0.85},
+                "per_sample": [{"faithfulness": 0.9, "answer_relevancy": 0.85}],
+                "error": None,
+            },
+        )
+
+        docs = [_make_doc("src/auth/login.py", "def login_user(): pass")]
+        live_eval.evaluate_and_store_live(
+            question="How does login work?",
+            answer="login_user handles authentication.",
+            documents=docs,
+            repo_id="owner/my-repo",
+            user_id="user@example.com",
+        )
+
+        loaded = live_eval.load_live_metrics("owner/my-repo")
+        assert loaded["repo_id"] == "owner/my-repo"
+        assert loaded["total_evaluated_queries"] == 1
+        assert loaded["aggregate_ragas_scores"]["faithfulness"] == pytest.approx(0.9)
+        assert loaded["aggregate_ragas_scores"]["answer_relevancy"] == pytest.approx(0.85)
+        assert loaded["history"][0]["sources"] == ["src/auth/login.py"]
+
+        summary = live_eval.load_live_metrics()
+        assert len(summary["repositories"]) == 1
+        assert summary["repositories"][0]["repo_id"] == "owner/my-repo"

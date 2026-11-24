@@ -365,7 +365,6 @@ def _get_embedding_cache():
 
 
 def embed_query(query: str, model: str = None) -> list[float]:
-<<<<<<< HEAD
     """Embed with the same FastEmbed model as ingestion; cache vectors in Redis."""
     sanitized = query.strip() if query and query.strip() else "codebase search query"
 
@@ -402,7 +401,6 @@ def embed_query(query: str, model: str = None) -> list[float]:
         print(f"[CACHE WARN] Redis write failed; returning computed embedding: {e}")
 
     return vector
-=======
     """
     Embed the user's query with Redis caching.
     - Checks Redis cache first (exact match by version, model, and SHA-256 of case-preserved normalized query).
@@ -427,7 +425,6 @@ def embed_query(query: str, model: str = None) -> list[float]:
     set_cached_query_embedding(sanitized, model_name, embedding)
 
     return embedding
->>>>>>> de0500e
 
 def retrieve_documents(question: str, repo_id: str, user_id: str = "default_user"):
     print(f"\n[DEBUG] === Starting Retrieval ===")

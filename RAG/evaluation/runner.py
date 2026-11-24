@@ -196,6 +196,7 @@ def run_evaluation(
             faith_score = eval_metrics["faithfulness"]["score"]
             relev_score = eval_metrics["answer_relevancy"]["score"]
             prec_score = eval_metrics["context_precision"]["score"]
+            recall_score = eval_metrics["context_recall"]["score"]
             ground_score = eval_metrics["code_grounding"]["score"]
             comp_score = eval_metrics["composite_score"]
 
@@ -215,7 +216,8 @@ def run_evaluation(
                 f"Precision={prec_score:.2f} Composite={comp_score:.2f}"
             )
             if file_recall_score is not None:
-                print(f"    File Recall@{k}={file_recall_score:.2f} | Func Coverage={func_cov_score:.2f if func_cov_score is not None else 'N/A'}")
+                func_cov_str = f"{func_cov_score:.2f}" if func_cov_score is not None else "N/A"
+                print(f"    File Recall@{k}={file_recall_score:.2f} | Func Coverage={func_cov_str}")
 
             # Collect for RAGAS (if enabled)
             ragas_samples.append({
@@ -239,6 +241,7 @@ def run_evaluation(
                     "faithfulness": faith_score,
                     "answer_relevancy": relev_score,
                     "context_precision": prec_score,
+                    "context_recall": recall_score,
                     "code_grounding": ground_score,
                     "composite": comp_score,
                     "file_recall_at_k": file_recall_score,
@@ -304,6 +307,7 @@ def run_evaluation(
     avg_faith = _avg("faithfulness")
     avg_relev = _avg("answer_relevancy")
     avg_prec = _avg("context_precision")
+    avg_recall = _avg("context_recall")
     avg_ground = _avg("code_grounding")
     avg_comp = _avg("composite")
     avg_file_recall = _avg("file_recall_at_k")
@@ -356,6 +360,7 @@ def run_evaluation(
             "average_faithfulness": avg_faith,
             "average_answer_relevancy": avg_relev,
             "average_context_precision": avg_prec,
+            "average_context_recall": avg_recall,
             "average_code_grounding": avg_ground,
             "overall_composite_score": avg_comp,
             "average_file_recall_at_k": avg_file_recall,
@@ -388,7 +393,7 @@ def run_evaluation(
         writer = csv.writer(f)
         writer.writerow([
             "ID", "Category", "Question",
-            "Faithfulness", "Relevancy", "Precision", "Code Grounding", "Composite",
+            "Faithfulness", "Relevancy", "Precision", "Recall", "Code Grounding", "Composite",
             "File Recall@K", "Chunk Recall@K", "Func Coverage",
             "Retrieved Docs", "Status",
         ])
@@ -397,7 +402,7 @@ def run_evaluation(
             writer.writerow([
                 r["id"], r["category"], r["question"][:80],
                 sc.get("faithfulness", ""), sc.get("answer_relevancy", ""),
-                sc.get("context_precision", ""), sc.get("code_grounding", ""), sc.get("composite", ""),
+                sc.get("context_precision", ""), sc.get("context_recall", ""), sc.get("code_grounding", ""), sc.get("composite", ""),
                 sc.get("file_recall_at_k", ""), sc.get("chunk_recall_at_k", ""),
                 sc.get("function_coverage", ""),
                 r.get("retrieved_chunks_count", 0), r["status"],

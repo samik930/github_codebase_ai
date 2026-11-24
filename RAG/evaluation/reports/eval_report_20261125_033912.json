@@ -1,0 +1,1037 @@
+{
+  "timestamp": "2026-11-24T22:09:12.428396",
+  "repository": "samik930/gen_AI_Project",
+  "user_id": "samikpodder396@gmail.com",
+  "effective_user_id": "samikpodder396@gmail.com",
+  "bypass_cache": false,
+  "use_ragas": true,
+  "k_cutoff": 10,
+  "evaluation_duration_seconds": 114.49,
+  "total_questions": 3,
+  "passed_questions": 2,
+  "pass_rate_percentage": 66.7,
+  "aggregate_metrics": {
+    "average_faithfulness": 1.0,
+    "average_answer_relevancy": 0.667,
+    "average_context_precision": 0.667,
+    "average_context_recall": 0.833,
+    "average_code_grounding": 1.0,
+    "overall_composite_score": 0.8,
+    "average_file_recall_at_k": 1.0,
+    "average_chunk_recall_at_k": 0.0,
+    "average_function_coverage": 1.0
+  },
+  "ragas_scores": {
+    "status": "failed",
+    "aggregate": {
+      "faithfulness": null,
+      "answer_relevancy": null,
+      "context_precision": null,
+      "context_recall": null
+    },
+    "per_sample": [
+      {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null,
+        "context_recall": null
+      },
+      {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null,
+        "context_recall": null
+      },
+      {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null,
+        "context_recall": null
+      }
+    ],
+    "error": "All RAGAS metric jobs returned NaN (check evaluator LLM/API access)."
+  },
+  "diagnostics": {
+    "zero_retrieval_questions": [],
+    "file_hit_but_function_missed": [],
+    "low_scoring_questions": [
+      {
+        "id": "genai_02",
+        "question": "How does registerUserController handle user registration and what libraries does auth.controller.js use?",
+        "composite": 0.525,
+        "faithfulness": 1.0,
+        "precision": 0.5
+      }
+    ]
+  },
+  "individual_results": [
+    {
+      "id": "genai_01",
+      "category": "function_implementation",
+      "question": "How does the AI service initialize GoogleGenAI and parse JSON responses from Gemini?",
+      "reference": "Backend/src/services/ai.service.js initializes GoogleGenAI using process.env.GOOGLE_GENAI_API_KEY and defines safeParseGeminiResponse(text) which tries JSON.parse first, then strips markdown json code fences before parsing.",
+      "expected_files": [
+        "Backend/src/services/ai.service.js"
+      ],
+      "retrieved_sources": [
+        "Backend/src/services/mockInterview.service.js",
+        "Backend/src/services/ai.service.js",
+        "Backend/test.js",
+        "Backend/src/services/ai.service.js",
+        "Backend/src/controllers/mockInterview.controller.js",
+        "Backend/src/services/mockInterview.service.js",
+        "README.md",
+        "README.md",
+        "Backend/src/services/temp.js",
+        "Backend/package.json",
+        "Backend/src/services/temp.js",
+        "Backend/src/controllers/interview.controller.js",
+        "Frontend/src/features/interview/pages/Home.jsx",
+        "Frontend/src/features/interview/services/mockInterviewApi.js",
+        "Backend/src/app.js",
+        "Backend/ex.js"
+      ],
+      "retrieved_chunks_count": 16,
+      "generated_answer": "**How the AI service talks to Gemini and turns its replies into usable JSON**\n\n| Step | What the code does | Where it lives |\n|------|--------------------|----------------|\n| **1. Create the Gemini client** | ```js<br>const ai = new GoogleGenAI({<br>  apiKey: process.env.GOOGLE_GENAI_API_KEY<br>});<br>``` | `Backend/src/services/ai.service.js` (top of the file) |\n| **2. Send a prompt** | The service calls `ai.models.generateContent({ model: \"gemini-3-flash-preview\", contents: prompt, config: { responseMimeType: \"application/json\" } })`. The `responseMimeType` hint tells Gemini to return JSON\u2011formatted text, but Gemini still wraps it in Markdown fences. | `Backend/src/services/ai.service.js` \u2013 the block that calls `generateContent` |\n| **3. Clean up the raw text** | The helper `safeParseGeminiResponse` is invoked on `response.text`. It does three things:<br>1. **Try a straight `JSON.parse`** \u2013 if the text is already valid JSON it returns it immediately.<br>2. **Strip Markdown fences** \u2013 removes ```json and ``` from the string.<br>3. **Extract the JSON object** \u2013 finds the first `{` and the last `}` and keeps only that substring.<br>4. **Remove trailing commas** \u2013 replaces `,}` or `,]` with `}` or `]` so the string is valid JSON.<br>5. **Parse again** \u2013 attempts `JSON.parse` on the cleaned string; if it still fails, it logs the problematic text and throws. | `Backend/src/services/ai.service.js` \u2013 the `safeParseGeminiResponse` function |\n| **4. Validate the parsed object** | After parsing, the service feeds the object into a Zod schema (`interviewReportSchema` or `evaluationSchema`). Zod ensures the shape, types, and constraints (e.g., score between 0\u201110). If validation fails, the error is propagated. | `Backend/src/services/ai.service.js` \u2013 the `try { interviewReportSchema.parse(...) } catch \u2026` block |\n| **5. Use the validated data** | The returned object is then used to build interview reports, evaluate answers, or compute scores. | Various places in `ai.service.js` and `mockInterview.service.js` |\n\n### Key code snippets\n\n```js\n// 1. Initialisation\nconst ai = new GoogleGenAI({\n  apiKey: process.env.GOOGLE_GENAI_API_KEY\n});\n```\n\n```js\n// 3. JSON cleaning helper\nfunction safeParseGeminiResponse(text) {\n  try { return JSON.parse(text); } catch (e) {}\n\n  text = text\n    .replace(/```json/gi, \"\")\n    .replace(/```/g, \"\")\n    .trim();\n\n  const start = text.indexOf(\"{\");\n  const end   = text.lastIndexOf(\"}\");\n  if (start !== -1 && end !== -1) {\n    text = text.substring(start, end + 1);\n  }\n\n  text = text.replace(/,\\s*([}\\]])/g, \"$1\");\n\n  try { return JSON.parse(text); } catch (err) {\n    console.error(\"Still couldn't parse JSON.\");\n    console.error(text);\n    throw err;\n  }\n}\n```\n\n```js\n// 4. Using the helper\nconst response = await ai.models.generateContent({\n  model: \"gemini-3-flash-preview\",\n  contents: prompt,\n  config: { responseMimeType: \"application/json\" }\n});\n\nconst report = interviewReportSchema.parse(\n  safeParseGeminiResponse(response.text)\n);\n```\n\n### Summary\n\n- **Initialization**: The service creates a `GoogleGenAI` instance with the API key from the environment (`process.env.GOOGLE_GENAI_API_KEY`).\n- **Parsing**: It defines `safeParseGeminiResponse` to strip Markdown fences, isolate the JSON object, remove trailing commas, and parse the string. The parsed object is then validated against a Zod schema before being used. This two\u2011step approach guarantees that even if Gemini returns a slightly malformed JSON wrapped in Markdown, the service can recover and work with a clean JavaScript object.",
+      "cited_sources": [
+        {
+          "source": "Backend/src/services/mockInterview.service.js",
+          "path": "Backend/src/services/mockInterview.service.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterview.service.js"
+        },
+        {
+          "source": "Backend/src/services/ai.service.js",
+          "path": "Backend/src/services/ai.service.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "ai.service.js"
+        },
+        {
+          "source": "Backend/test.js",
+          "path": "Backend/test.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "test.js"
+        },
+        {
+          "source": "Backend/src/controllers/mockInterview.controller.js",
+          "path": "Backend/src/controllers/mockInterview.controller.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterview.controller.js"
+        },
+        {
+          "source": "README.md",
+          "path": "README.md",
+          "language": "text",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "documentation",
+          "raw_url": "",
+          "filename": "README.md"
+        },
+        {
+          "source": "Backend/src/services/temp.js",
+          "path": "Backend/src/services/temp.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "temp.js"
+        },
+        {
+          "source": "Backend/package.json",
+          "path": "Backend/package.json",
+          "language": "text",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "package.json"
+        },
+        {
+          "source": "Backend/src/controllers/interview.controller.js",
+          "path": "Backend/src/controllers/interview.controller.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "interview.controller.js"
+        },
+        {
+          "source": "Frontend/src/features/interview/pages/Home.jsx",
+          "path": "Frontend/src/features/interview/pages/Home.jsx",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "Home.jsx"
+        },
+        {
+          "source": "Frontend/src/features/interview/services/mockInterviewApi.js",
+          "path": "Frontend/src/features/interview/services/mockInterviewApi.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterviewApi.js"
+        },
+        {
+          "source": "Backend/src/app.js",
+          "path": "Backend/src/app.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "app.js"
+        },
+        {
+          "source": "Backend/ex.js",
+          "path": "Backend/ex.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "ex.js"
+        }
+      ],
+      "scores": {
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "context_precision": 0.5,
+        "context_recall": 1.0,
+        "code_grounding": 1.0,
+        "composite": 0.875,
+        "file_recall_at_k": 1.0,
+        "chunk_recall_at_k": null,
+        "function_coverage": 1.0
+      },
+      "code_metrics_detail": {
+        "file_recall": {
+          "score": 1.0,
+          "found_files": [
+            "Backend/src/services/ai.service.js"
+          ],
+          "missing_files": [],
+          "k": 10,
+          "total_expected": 1
+        },
+        "chunk_recall": {
+          "score": null,
+          "matched_count": 0,
+          "total_expected": 0,
+          "k": 10,
+          "min_overlap_threshold": 0.35,
+          "per_context": [],
+          "note": "No reference_contexts provided \u2014 metric not applicable."
+        },
+        "function_coverage": {
+          "score": 1.0,
+          "found_functions": [
+            "safeParseGeminiResponse"
+          ],
+          "missing_functions": [],
+          "total_expected": 1
+        },
+        "line_coverage": {
+          "score": null,
+          "covered_lines": 0,
+          "total_expected_lines": 0,
+          "metadata_missing": false,
+          "reason": "No expected_line_ranges provided \u2014 metric not applicable."
+        }
+      },
+      "details": {
+        "composite_score": 0.875,
+        "faithfulness": {
+          "score": 1.0,
+          "claims": [
+            {
+              "claim": "The AI service initializes GoogleGenAI using the API key from process.env.GOOGLE_GENAI_API_KEY.",
+              "supported": true,
+              "reason": "This is explicitly shown in the initialization code blocks in ai.service.js and mockInterview.service.js."
+            },
+            {
+              "claim": "The service calls ai.models.generateContent with the model 'gemini-3-flash-preview' and config { responseMimeType: 'application/json' }.",
+              "supported": true,
+              "reason": "This is directly evidenced in the code snippets provided from ai.service.js and mockInterview.service.js."
+            },
+            {
+              "claim": "The helper function safeParseGeminiResponse attempts a straight JSON.parse first.",
+              "supported": true,
+              "reason": "The code in both ai.service.js and mockInterview.service.js shows a try-catch block attempting JSON.parse(text) before any string manipulation."
+            },
+            {
+              "claim": "The helper function strips markdown fences (```json and ```) and trims the text.",
+              "supported": true,
+              "reason": "The regex replacements and .trim() calls are present in the provided code."
+            },
+            {
+              "claim": "The helper function extracts the JSON object by finding the first '{' and last '}'.",
+              "supported": true,
+              "reason": "The code uses indexOf('{') and lastIndexOf('}') to substring the text."
+            },
+            {
+              "claim": "The helper function removes trailing commas using a regex.",
+              "supported": true,
+              "reason": "The code uses .replace(/,\\s*([}\\]])/g, \"$1\") to handle trailing commas."
+            },
+            {
+              "claim": "The service validates the parsed object against a Zod schema (interviewReportSchema or evaluationSchema).",
+              "supported": true,
+              "reason": "The code shows the use of .parse() on these schemas after calling the helper function."
+            },
+            {
+              "claim": "If validation fails, the error is propagated.",
+              "supported": true,
+              "reason": "The code includes try-catch blocks that throw the error after logging."
+            }
+          ],
+          "feedback": "The generated answer accurately reflects the implementation details found in the provided codebase context."
+        },
+        "answer_relevancy": {
+          "score": 1.0,
+          "reasoning": "The answer provides a comprehensive, accurate, and highly structured explanation of both the initialization process and the JSON parsing logic. It directly addresses the user's prompt by mapping the technical implementation to specific code locations and providing the relevant code snippets.",
+          "strengths": [
+            "Clear, step-by-step breakdown of the process.",
+            "Includes specific code snippets for both initialization and the parsing helper function.",
+            "Identifies the exact file locations for the logic.",
+            "Explains the 'why' behind the parsing logic (handling Markdown fences and trailing commas)."
+          ],
+          "weaknesses": []
+        },
+        "context_precision": {
+          "score": 0.5,
+          "total_relevant_chunks": 2,
+          "total_evaluated_chunks": 10,
+          "reasoning": "The retrieval engine struggled to prioritize the correct file (ai.service.js), placing a mock service file at Rank 1. While it did eventually retrieve the correct file at Ranks 2 and 4, the relevant information was fragmented and mixed with irrelevant files, leading to poor precision.",
+          "chunk_evaluations": [
+            {
+              "rank": 1,
+              "relevant": false,
+              "reason": "This is from mockInterview.service.js, not the requested ai.service.js, though it shows similar initialization."
+            },
+            {
+              "rank": 2,
+              "relevant": true,
+              "reason": "This is the correct file (ai.service.js) and shows the initialization of GoogleGenAI."
+            },
+            {
+              "rank": 3,
+              "relevant": false,
+              "reason": "This is a test file, not the production service implementation."
+            },
+            {
+              "rank": 4,
+              "relevant": true,
+              "reason": "This is the correct file (ai.service.js) and shows how the model is called, which is part of the context for parsing responses."
+            },
+            {
+              "rank": 5,
+              "relevant": false,
+              "reason": "Irrelevant to the initialization or parsing logic."
+            },
+            {
+              "rank": 6,
+              "relevant": false,
+              "reason": "Irrelevant to the initialization or parsing logic."
+            },
+            {
+              "rank": 7,
+              "relevant": false,
+              "reason": "Irrelevant documentation."
+            },
+            {
+              "rank": 8,
+              "relevant": false,
+              "reason": "Irrelevant documentation."
+            },
+            {
+              "rank": 9,
+              "relevant": false,
+              "reason": "Irrelevant file."
+            },
+            {
+              "rank": 10,
+              "relevant": false,
+              "reason": "Irrelevant file."
+            }
+          ]
+        },
+        "context_recall": {
+          "score": 1.0,
+          "reasoning": "The retrieved context contains the exact file 'Backend/src/services/ai.service.js', which demonstrates the initialization of GoogleGenAI using 'process.env.GOOGLE_GENAI_API_KEY' and provides the full implementation of 'safeParseGeminiResponse(text)', including the logic to strip markdown code fences and attempt JSON parsing.",
+          "covered_statements": [
+            "Backend/src/services/ai.service.js initializes GoogleGenAI using process.env.GOOGLE_GENAI_API_KEY",
+            "Backend/src/services/ai.service.js defines safeParseGeminiResponse(text) which tries JSON.parse first, then strips markdown json code fences before parsing."
+          ],
+          "missing_statements": []
+        },
+        "code_grounding": {
+          "score": 1.0,
+          "valid_citations": [
+            "Backend/src/services/ai.service.js",
+            "ai.service.js",
+            "mockInterview.service.js"
+          ],
+          "hallucinated_citations": [],
+          "feedback": "3 valid citations, 0 ungrounded citations."
+        }
+      },
+      "status": "PASS",
+      "zero_retrieval": false,
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null,
+        "context_recall": null
+      }
+    },
+    {
+      "id": "genai_02",
+      "category": "authentication",
+      "question": "How does registerUserController handle user registration and what libraries does auth.controller.js use?",
+      "reference": "Backend/src/controllers/auth.controller.js uses userModel, blacklistModel, bcrypt, and jsonwebtoken. registerUserController checks that username, email, and password are provided in req.body and returns 400 if any are missing.",
+      "expected_files": [
+        "Backend/src/controllers/auth.controller.js"
+      ],
+      "retrieved_sources": [
+        "Backend/src/controllers/auth.controller.js",
+        "Backend/src/controllers/auth.controller.js",
+        "Frontend/src/features/auth/auth.context.jsx",
+        "README.md",
+        "README.md",
+        "Backend/src/routes/auth.routes.js",
+        "Frontend/src/features/auth/pages/Register.jsx",
+        "Backend/src/controllers/mockInterview.controller.js",
+        "Frontend/src/features/auth/hooks/useAuth.js",
+        "Frontend/src/features/interview/style/interview.scss",
+        "Frontend/src/features/auth/pages/Register.jsx",
+        "Frontend/src/features/auth/services/auth.api.js",
+        "Backend/src/models/interviewreport.model.js",
+        "Frontend/src/features/auth/components/Protected.jsx",
+        "Frontend/src/features/auth/hooks/useAuth.js",
+        "Frontend/src/features/auth/pages/Login.jsx"
+      ],
+      "retrieved_chunks_count": 16,
+      "generated_answer": "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment.",
+      "cited_sources": [
+        {
+          "source": "Backend/src/controllers/auth.controller.js",
+          "path": "Backend/src/controllers/auth.controller.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.controller.js"
+        },
+        {
+          "source": "Frontend/src/features/auth/auth.context.jsx",
+          "path": "Frontend/src/features/auth/auth.context.jsx",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.context.jsx"
+        },
+        {
+          "source": "README.md",
+          "path": "README.md",
+          "language": "text",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "documentation",
+          "raw_url": "",
+          "filename": "README.md"
+        },
+        {
+          "source": "Backend/src/routes/auth.routes.js",
+          "path": "Backend/src/routes/auth.routes.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.routes.js"
+        },
+        {
+          "source": "Frontend/src/features/auth/pages/Register.jsx",
+          "path": "Frontend/src/features/auth/pages/Register.jsx",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "Register.jsx"
+        },
+        {
+          "source": "Backend/src/controllers/mockInterview.controller.js",
+          "path": "Backend/src/controllers/mockInterview.controller.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterview.controller.js"
+        },
+        {
+          "source": "Frontend/src/features/auth/hooks/useAuth.js",
+          "path": "Frontend/src/features/auth/hooks/useAuth.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "useAuth.js"
+        },
+        {
+          "source": "Frontend/src/features/interview/style/interview.scss",
+          "path": "Frontend/src/features/interview/style/interview.scss",
+          "language": "text",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "interview.scss"
+        },
+        {
+          "source": "Frontend/src/features/auth/services/auth.api.js",
+          "path": "Frontend/src/features/auth/services/auth.api.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.api.js"
+        },
+        {
+          "source": "Backend/src/models/interviewreport.model.js",
+          "path": "Backend/src/models/interviewreport.model.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "interviewreport.model.js"
+        },
+        {
+          "source": "Frontend/src/features/auth/components/Protected.jsx",
+          "path": "Frontend/src/features/auth/components/Protected.jsx",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "Protected.jsx"
+        },
+        {
+          "source": "Frontend/src/features/auth/pages/Login.jsx",
+          "path": "Frontend/src/features/auth/pages/Login.jsx",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "Login.jsx"
+        }
+      ],
+      "scores": {
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.0,
+        "context_precision": 0.5,
+        "context_recall": 0.5,
+        "code_grounding": 1.0,
+        "composite": 0.525,
+        "file_recall_at_k": 1.0,
+        "chunk_recall_at_k": null,
+        "function_coverage": 1.0
+      },
+      "code_metrics_detail": {
+        "file_recall": {
+          "score": 1.0,
+          "found_files": [
+            "Backend/src/controllers/auth.controller.js"
+          ],
+          "missing_files": [],
+          "k": 10,
+          "total_expected": 1
+        },
+        "chunk_recall": {
+          "score": null,
+          "matched_count": 0,
+          "total_expected": 0,
+          "k": 10,
+          "min_overlap_threshold": 0.35,
+          "per_context": [],
+          "note": "No reference_contexts provided \u2014 metric not applicable."
+        },
+        "function_coverage": {
+          "score": 1.0,
+          "found_functions": [
+            "registerUserController"
+          ],
+          "missing_functions": [],
+          "total_expected": 1
+        },
+        "line_coverage": {
+          "score": null,
+          "covered_lines": 0,
+          "total_expected_lines": 0,
+          "metadata_missing": false,
+          "reason": "No expected_line_ranges provided \u2014 metric not applicable."
+        }
+      },
+      "details": {
+        "composite_score": 0.525,
+        "faithfulness": {
+          "score": 1.0,
+          "claims": [
+            {
+              "claim": "The model could not generate an answer due to an upstream model error.",
+              "supported": false,
+              "reason": "This is a meta-statement about the AI's internal state/error handling, not a factual claim derived from the provided codebase context."
+            }
+          ],
+          "feedback": "The generated answer contains no factual claims about the codebase, therefore it is considered vacuously faithful according to the instructions."
+        },
+        "answer_relevancy": {
+          "score": 0.0,
+          "reasoning": "The generated answer is a generic error message indicating a failure to process the request, rather than providing any information about the codebase or the specific functions requested.",
+          "strengths": [],
+          "weaknesses": [
+            "The answer fails to address the user's question entirely.",
+            "The answer provides no technical details regarding registerUserController or the libraries used in auth.controller.js.",
+            "The response is a system error message rather than a functional response."
+          ]
+        },
+        "context_precision": {
+          "score": 0.5,
+          "total_relevant_chunks": 1,
+          "total_evaluated_chunks": 10,
+          "reasoning": "The retrieval engine performed poorly. Only one chunk (Rank 2) was relevant to the question. The engine failed to retrieve the actual registerUserController function definition, instead returning unrelated controller methods, frontend files, and documentation.",
+          "chunk_evaluations": [
+            {
+              "rank": 1,
+              "relevant": false,
+              "reason": "This chunk contains getMeController, which is irrelevant to the registerUserController function requested."
+            },
+            {
+              "rank": 2,
+              "relevant": true,
+              "reason": "This chunk contains the core logic for user creation and bcrypt usage, which is directly relevant to the question."
+            },
+            {
+              "rank": 3,
+              "relevant": false,
+              "reason": "This is frontend code and does not explain backend registration logic."
+            },
+            {
+              "rank": 4,
+              "relevant": false,
+              "reason": "This is a project structure overview, not relevant to the specific implementation details."
+            },
+            {
+              "rank": 5,
+              "relevant": false,
+              "reason": "This is API documentation, not the implementation code requested."
+            },
+            {
+              "rank": 6,
+              "relevant": false,
+              "reason": "This is a route definition, not the controller implementation logic."
+            },
+            {
+              "rank": 7,
+              "relevant": false,
+              "reason": "This is frontend UI code, not the backend registration logic."
+            },
+            {
+              "rank": 8,
+              "relevant": false,
+              "reason": "This is an unrelated controller file."
+            },
+            {
+              "rank": 9,
+              "relevant": false,
+              "reason": "This is a frontend hook, not the backend registration logic."
+            },
+            {
+              "rank": 10,
+              "relevant": false,
+              "reason": "This is a CSS file, completely irrelevant."
+            }
+          ]
+        },
+        "context_recall": {
+          "score": 0.5,
+          "reasoning": "The retrieved context identifies the file structure and some dependencies, but it does not contain the implementation of 'registerUserController' to verify the specific validation logic (checking for username, email, and password and returning a 400 status).",
+          "covered_statements": [
+            "Backend/src/controllers/auth.controller.js uses userModel, blacklistModel, bcrypt, and jsonwebtoken."
+          ],
+          "missing_statements": [
+            "registerUserController checks that username, email, and password are provided in req.body and returns 400 if any are missing."
+          ]
+        },
+        "code_grounding": {
+          "score": 1.0,
+          "valid_citations": [],
+          "hallucinated_citations": [],
+          "feedback": "No specific files cited."
+        }
+      },
+      "status": "NEEDS_REVIEW",
+      "zero_retrieval": false,
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null,
+        "context_recall": null
+      }
+    },
+    {
+      "id": "genai_03",
+      "category": "authentication",
+      "question": "How does the authUser middleware validate JWT tokens and check for blacklisted tokens?",
+      "reference": "Backend/src/middlewares/auth.middleware.js defines authUser(req, res, next), which reads req.cookies.token, returns 401 if missing, checks blacklistModel.findOne({token}) returning 401 if blacklisted, and verifies the token with jwt.",
+      "expected_files": [
+        "Backend/src/middlewares/auth.middleware.js"
+      ],
+      "retrieved_sources": [
+        "Backend/src/middlewares/auth.middleware.js",
+        "Backend/src/controllers/auth.controller.js",
+        "README.md",
+        "Backend/ex.js",
+        "README.md",
+        "Backend/src/models/blacklist.model.js",
+        "Backend/src/controllers/auth.controller.js",
+        "Frontend/README.md",
+        "Backend/src/controllers/mockInterview.controller.js",
+        "Backend/src/routes/auth.routes.js",
+        "Frontend/src/features/auth/services/auth.api.js",
+        "Backend/src/app.js",
+        "Backend/src/routes/mockInterview.routes.js",
+        "Backend/src/services/mockInterview.service.js",
+        "Backend/src/services/mockInterview.service.js",
+        "Frontend/src/features/auth/hooks/useAuth.js"
+      ],
+      "retrieved_chunks_count": 16,
+      "generated_answer": "The `authUser` middleware, located in `Backend/src/middlewares/auth.middleware.js`, performs JWT validation and blacklist checking through the following logic:\n\n### 1. Token Retrieval and Existence Check\nThe middleware first attempts to retrieve the token from the request cookies:\n```javascript\nconst token = req.cookies.token\nif(!token) {\n    return res.status(401).json({\n        message : \"Token not provided\"\n    })\n}\n```\n\n### 2. Blacklist Verification\nBefore validating the JWT's signature, the middleware checks if the token has been blacklisted (which occurs during a user logout). It queries the `blacklistModel` (defined in `Backend/src/models/blacklist.model.js`) to see if the current token exists in the database:\n```javascript\nconst isTokenBlacklisted = await blacklistModel.findOne({token})\n\nif(isTokenBlacklisted) {\n    return res.status(401).json({\n        message : \"Token is invalid\"\n    })\n}\n```\n*Note: The `logoutUserController` in `Backend/src/controllers/auth.controller.js` is responsible for adding tokens to this collection when a user logs out.*\n\n### 3. JWT Signature Validation\nIf the token is not blacklisted, the middleware proceeds to verify the token's integrity and expiration using the `jsonwebtoken` library and an environment variable (`process.env.JWT_SECRET`):\n```javascript\ntry {\n    const decoded = jwt.verify(token, process.env.JWT_SECRET)\n    req.user = decoded\n    next()\n} catch(error) {\n    return res.status(401).json({\n        message : \"Invalid token\"\n    })\n}\n```\n*   **Success:** If `jwt.verify` succeeds, the decoded payload is attached to `req.user`, and the request proceeds to the next middleware or route handler via `next()`.\n*   **Failure:** If the token is expired, malformed, or the secret key does not match, the `catch` block intercepts the error and returns a `401 Unauthorized` status.",
+      "cited_sources": [
+        {
+          "source": "Backend/src/middlewares/auth.middleware.js",
+          "path": "Backend/src/middlewares/auth.middleware.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.middleware.js"
+        },
+        {
+          "source": "Backend/src/controllers/auth.controller.js",
+          "path": "Backend/src/controllers/auth.controller.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.controller.js"
+        },
+        {
+          "source": "README.md",
+          "path": "README.md",
+          "language": "text",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "documentation",
+          "raw_url": "",
+          "filename": "README.md"
+        },
+        {
+          "source": "Backend/ex.js",
+          "path": "Backend/ex.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "ex.js"
+        },
+        {
+          "source": "Backend/src/models/blacklist.model.js",
+          "path": "Backend/src/models/blacklist.model.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "blacklist.model.js"
+        },
+        {
+          "source": "Frontend/README.md",
+          "path": "Frontend/README.md",
+          "language": "text",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "documentation",
+          "raw_url": "",
+          "filename": "README.md"
+        },
+        {
+          "source": "Backend/src/controllers/mockInterview.controller.js",
+          "path": "Backend/src/controllers/mockInterview.controller.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterview.controller.js"
+        },
+        {
+          "source": "Backend/src/routes/auth.routes.js",
+          "path": "Backend/src/routes/auth.routes.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.routes.js"
+        },
+        {
+          "source": "Frontend/src/features/auth/services/auth.api.js",
+          "path": "Frontend/src/features/auth/services/auth.api.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "auth.api.js"
+        },
+        {
+          "source": "Backend/src/app.js",
+          "path": "Backend/src/app.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "app.js"
+        },
+        {
+          "source": "Backend/src/routes/mockInterview.routes.js",
+          "path": "Backend/src/routes/mockInterview.routes.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterview.routes.js"
+        },
+        {
+          "source": "Backend/src/services/mockInterview.service.js",
+          "path": "Backend/src/services/mockInterview.service.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "mockInterview.service.js"
+        },
+        {
+          "source": "Frontend/src/features/auth/hooks/useAuth.js",
+          "path": "Frontend/src/features/auth/hooks/useAuth.js",
+          "language": "javascript",
+          "repo_id": "samik930/gen_AI_Project",
+          "type": "code",
+          "raw_url": "",
+          "filename": "useAuth.js"
+        }
+      ],
+      "scores": {
+        "faithfulness": 1.0,
+        "answer_relevancy": 1.0,
+        "context_precision": 1.0,
+        "context_recall": 1.0,
+        "code_grounding": 1.0,
+        "composite": 1.0,
+        "file_recall_at_k": 1.0,
+        "chunk_recall_at_k": null,
+        "function_coverage": 1.0
+      },
+      "code_metrics_detail": {
+        "file_recall": {
+          "score": 1.0,
+          "found_files": [
+            "Backend/src/middlewares/auth.middleware.js"
+          ],
+          "missing_files": [],
+          "k": 10,
+          "total_expected": 1
+        },
+        "chunk_recall": {
+          "score": null,
+          "matched_count": 0,
+          "total_expected": 0,
+          "k": 10,
+          "min_overlap_threshold": 0.35,
+          "per_context": [],
+          "note": "No reference_contexts provided \u2014 metric not applicable."
+        },
+        "function_coverage": {
+          "score": 1.0,
+          "found_functions": [
+            "authUser"
+          ],
+          "missing_functions": [],
+          "total_expected": 1
+        },
+        "line_coverage": {
+          "score": null,
+          "covered_lines": 0,
+          "total_expected_lines": 0,
+          "metadata_missing": false,
+          "reason": "No expected_line_ranges provided \u2014 metric not applicable."
+        }
+      },
+      "details": {
+        "composite_score": 1.0,
+        "faithfulness": {
+          "score": 1.0,
+          "claims": [
+            {
+              "claim": "The authUser middleware is located in Backend/src/middlewares/auth.middleware.js.",
+              "supported": true,
+              "reason": "The file path is explicitly provided in the context header."
+            },
+            {
+              "claim": "The middleware retrieves the token from the request cookies.",
+              "supported": true,
+              "reason": "The code snippet 'const token = req.cookies.token' confirms this."
+            },
+            {
+              "claim": "If the token is missing, the middleware returns a 401 status with the message 'Token not provided'.",
+              "supported": true,
+              "reason": "The code explicitly shows this conditional check and response."
+            },
+            {
+              "claim": "The middleware checks if the token is blacklisted by querying the blacklistModel.",
+              "supported": true,
+              "reason": "The code 'const isTokenBlacklisted = await blacklistModel.findOne({token})' confirms this."
+            },
+            {
+              "claim": "If the token is blacklisted, the middleware returns a 401 status with the message 'Token is invalid'.",
+              "supported": true,
+              "reason": "The code explicitly shows this conditional check and response."
+            },
+            {
+              "claim": "The logoutUserController in Backend/src/controllers/auth.controller.js adds tokens to the blacklist collection during logout.",
+              "supported": true,
+              "reason": "The provided code for logoutUserController shows 'await blacklistModel.create({token})'."
+            },
+            {
+              "claim": "The middleware verifies the JWT using the jsonwebtoken library and process.env.JWT_SECRET.",
+              "supported": true,
+              "reason": "The code 'jwt.verify(token,process.env.JWT_SECRET)' confirms this."
+            },
+            {
+              "claim": "If verification succeeds, the decoded payload is attached to req.user and next() is called.",
+              "supported": true,
+              "reason": "The code 'req.user = decoded' and 'next()' confirms this."
+            },
+            {
+              "claim": "If verification fails, the catch block returns a 401 status with the message 'Invalid token'.",
+              "supported": true,
+              "reason": "The catch block in the provided code confirms this response."
+            }
+          ],
+          "feedback": "The generated answer is fully supported by the provided codebase context. Every claim accurately reflects the logic found in the specified files."
+        },
+        "answer_relevancy": {
+          "score": 1.0,
+          "reasoning": "The answer directly addresses both parts of the user's question (JWT validation and blacklist checking) by providing the exact code snippets and logic flow from the specified middleware. It explains the process step-by-step, identifies the relevant files, and clarifies how the blacklist mechanism interacts with the logout controller.",
+          "strengths": [
+            "Provides clear, step-by-step technical explanation.",
+            "Includes relevant code snippets from the codebase.",
+            "Identifies specific file paths for context.",
+            "Explains the interaction between the middleware and the blacklist model."
+          ],
+          "weaknesses": []
+        },
+        "context_precision": {
+          "score": 1.0,
+          "total_relevant_chunks": 1,
+          "total_evaluated_chunks": 10,
+          "reasoning": "The retrieval engine correctly identified the primary file (Rank 1) containing the requested middleware logic. However, the remaining 9 chunks are irrelevant, providing either controller logic, project documentation, or unrelated service files that do not explain the implementation details of the authUser middleware.",
+          "chunk_evaluations": [
+            {
+              "rank": 1,
+              "relevant": true,
+              "reason": "Contains the target middleware function definition and imports necessary for the logic."
+            },
+            {
+              "rank": 2,
+              "relevant": false,
+              "reason": "Contains auth controller logic, not the middleware implementation requested."
+            },
+            {
+              "rank": 3,
+              "relevant": false,
+              "reason": "Contains project structure documentation, irrelevant to middleware logic."
+            },
+            {
+              "rank": 4,
+              "relevant": false,
+              "reason": "Contains unrelated AI service logic."
+            },
+            {
+              "rank": 5,
+              "relevant": false,
+              "reason": "Contains project overview documentation, irrelevant to middleware logic."
+            },
+            {
+              "rank": 6,
+              "relevant": false,
+              "reason": "Contains the schema definition for the blacklist, but not the logic for checking it within the middleware."
+            },
+            {
+              "rank": 7,
+              "relevant": false,
+              "reason": "Contains controller response logic, irrelevant to middleware authentication."
+            },
+            {
+              "rank": 8,
+              "relevant": false,
+              "reason": "Contains frontend linting documentation, irrelevant to backend middleware."
+            },
+            {
+              "rank": 9,
+              "relevant": false,
+              "reason": "Contains unrelated mock interview controller logic."
+            },
+            {
+              "rank": 10,
+              "relevant": false,
+              "reason": "Contains route definitions, which reference the middleware but do not explain its internal logic."
+            }
+          ]
+        },
+        "context_recall": {
+          "score": 1.0,
+          "reasoning": "The retrieved context contains the full implementation of the authUser middleware in 'Backend/src/middlewares/auth.middleware.js', which explicitly shows the token extraction from cookies, the blacklist check using the blacklistModel, and the JWT verification process.",
+          "covered_statements": [
+            "Backend/src/middlewares/auth.middleware.js defines authUser(req, res, next)",
+            "reads req.cookies.token",
+            "returns 401 if missing",
+            "checks blacklistModel.findOne({token}) returning 401 if blacklisted",
+            "verifies the token with jwt"
+          ],
+          "missing_statements": []
+        },
+        "code_grounding": {
+          "score": 1.0,
+          "valid_citations": [
+            "Backend/src/middlewares/auth.middleware.js",
+            "Backend/src/models/blacklist.model.js",
+            "Backend/src/controllers/auth.controller.js"
+          ],
+          "hallucinated_citations": [],
+          "feedback": "3 valid citations, 0 ungrounded citations."
+        }
+      },
+      "status": "PASS",
+      "zero_retrieval": false,
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null,
+        "context_precision": null,
+        "context_recall": null
+      }
+    }
+  ]
+}

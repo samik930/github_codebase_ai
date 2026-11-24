@@ -19,8 +19,9 @@ GROQ_MODELS = [
 
 # Gemini fallback models (used only if ALL Groq models fail)
 GEMINI_FALLBACK_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
+    "gemini-2.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
 ]
 
 

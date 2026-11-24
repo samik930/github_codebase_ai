@@ -1,0 +1,307 @@
+{
+  "repo_id": "Survivor1007/Retail-Forecast-System",
+  "updated_at": "2026-11-24T21:47:08.347258+00:00",
+  "total_evaluated_queries": 11,
+  "aggregate_ragas_scores": {
+    "answer_relevancy": 0.4844,
+    "faithfulness": 0.1154
+  },
+  "history": [
+    {
+      "timestamp": "2026-11-24T21:11:25.907550+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "how is the sql schema looks like",
+      "answer_preview": "**SQL schema (PostgreSQL\u202f16)**  \nThe database is created by the two seed\u2011scripts in  \n`database/docker-entrypoint-initdb.d/01_schema_sql.sql` and `02_seed_data.sql`.  \nBelow is the full DDL that is executed when the container starts.\n\n```sql\n-- 1. Store Master Table\nCREATE TABLE stores (\n    id     ",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "database/README.md",
+        "database/docker-entrypoint-initdb.d/01_schema_sql.sql",
+        "docs/architecture/OVERVIEW.md",
+        "docs/architecture/DATA_PIPELINE.md",
+        "backend/README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "README.md",
+        "frontend/src/pages/ETLDataHubPage.tsx",
+        "frontend/README.md",
+        "backend/src/core/schemas/__init__.py",
+        "docs/screenshots/etl_data_hub.png"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:21:44.532127+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "which ML algorithms are used here?",
+      "answer_preview": "The repository implements a **5\u2011model competition engine** that evaluates five distinct forecasting algorithms for each store\u2011product combination.  \nThe algorithms are:\n\n| # | Algorithm | Library / Implementation | Key details |\n|---|-----------|--------------------------|-------------|\n| 1 | **Simp",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "backend/src/modules/forecasting/models.py",
+        "docs/architecture/DATA_PIPELINE.md",
+        "backend/src/modules/forecasting/evaluator.py",
+        "docs/architecture/ADR_DECISIONS.md",
+        "docs/screenshots/landing_page.png",
+        "frontend/public/icons.svg",
+        "backend/README.md",
+        "frontend/src/context/ThemeContext.tsx",
+        "frontend/src/pages/LandingPage.tsx",
+        "backend/src/api/v1/forecasting.py",
+        "backend/src/modules/etl/cleaner.py",
+        "README.md"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.7151
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:24:20.452763+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "explain the DB schema",
+      "answer_preview": "**Retail\u2011Forecast System \u2013 PostgreSQL 16 Database Schema**\n\nThe project stores *both* master data (stores, products, categories, orders) **and** pre\u2011aggregated time\u2011series analytics in a single PostgreSQL 16 database.  \nAll tables are created in `database/docker-entrypoint-initdb.d/01_schema_sql.sql",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "database/README.md",
+        "database/docker-entrypoint-initdb.d/01_schema_sql.sql",
+        "backend/src/core/database.py",
+        "docs/architecture/ADR_DECISIONS.md",
+        "docs/architecture/OVERVIEW.md",
+        "docs/architecture/DATA_PIPELINE.md",
+        "README.md",
+        "frontend/src/pages/ETLDataHubPage.tsx",
+        "backend/src/core/schemas/__init__.py",
+        "backend/src/utils/generate_synthetic_sales.py",
+        "docs/screenshots/etl_data_hub.png",
+        "backend/README.md",
+        "backend/src/api/v1/inventory.py"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.7549
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:32:19.939579+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "explain the architecture if any present in the README file",
+      "answer_preview": "**Architecture described in the repository\u2019s README files**\n\n| README | What it tells us about the architecture |\n|--------|----------------------------------------|\n| **Root `README.md`** | \u2022 Contains a **Mermaid diagram** that shows the end\u2011to\u2011end data flow (see the block that starts with `graph T",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "docs/architecture/OVERVIEW.md",
+        "docs/screenshots/README.md",
+        "backend/README.md",
+        "frontend/public/icons.svg",
+        "frontend/README.md",
+        "backend/src/core/models/__init__.py",
+        "README.md",
+        "LICENSE",
+        "database/README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "backend/src/api/v1/products.py",
+        "frontend/src/pages/LandingPage.tsx"
+      ],
+      "ragas_status": "failed",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null
+      },
+      "error": "All RAGAS metric jobs returned NaN (check evaluator LLM/API access)."
+    },
+    {
+      "timestamp": "2026-11-24T21:34:41.052021+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "how teh fastapi service is connected to the ML part?",
+      "answer_preview": "**Short answer**\n\nThe FastAPI service does not talk to a separate \u201cML micro\u2011service\u201d; it calls the ML code that lives in the same repository.  \nThe `/forecasting/generate` endpoint (defined in `backend/src/api/v1/forecasting.py`) pulls the historical aggregates from the PostgreSQL database, hands th",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "backend/README.md",
+        "docs/architecture/DATA_PIPELINE.md",
+        "backend/src/main.py",
+        "backend/src/api/v1/forecasting.py",
+        "backend/src/modules/forecasting/models.py",
+        "backend/src/api/v1/stores.py",
+        "frontend/nginx.conf",
+        "docs/screenshots/forecasting_studio.png",
+        "docker-compose.yml",
+        "backend/src/api/v1/analytics.py",
+        "README.md",
+        "backend/src/core/models/__init__.py"
+      ],
+      "ragas_status": "failed",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": null
+      },
+      "error": "All RAGAS metric jobs returned NaN (check evaluator LLM/API access)."
+    },
+    {
+      "timestamp": "2026-11-24T21:38:13.700313+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "what are the different stages of ML implemented here",
+      "answer_preview": "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment.",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "docs/architecture/DATA_PIPELINE.md",
+        "docs/screenshots/landing_page.png",
+        "backend/src/modules/forecasting/models.py",
+        "backend/src/core/models/__init__.py",
+        "README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "LICENSE",
+        "frontend/public/icons.svg",
+        "backend/README.md",
+        "database/README.md",
+        "docs/screenshots/forecasting_studio.png",
+        "backend/src/api/v1/forecasting.py"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:40:38.025026+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "what are the different stages of ML implemented here",
+      "answer_preview": "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment.",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "docs/architecture/DATA_PIPELINE.md",
+        "docs/screenshots/landing_page.png",
+        "backend/src/modules/forecasting/models.py",
+        "backend/src/core/models/__init__.py",
+        "README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "LICENSE",
+        "frontend/public/icons.svg",
+        "backend/README.md",
+        "database/README.md",
+        "docs/screenshots/forecasting_studio.png",
+        "backend/src/api/v1/forecasting.py"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:44:29.827260+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "how teh fastapi service is connected to the ML part?",
+      "answer_preview": "**Short answer**\n\nThe FastAPI service does **not** talk to a separate \u201cML micro\u2011service\u201d; it imports the ML code that lives in the same repository and calls it directly from an endpoint.  \nWhen a client hits the `/api/v1/forecasting/generate` route, the handler pulls the historical aggregates from t",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "backend/README.md",
+        "docs/architecture/DATA_PIPELINE.md",
+        "backend/src/main.py",
+        "backend/src/api/v1/forecasting.py",
+        "backend/src/modules/forecasting/models.py",
+        "backend/src/api/v1/stores.py",
+        "frontend/nginx.conf",
+        "docs/screenshots/forecasting_studio.png",
+        "docker-compose.yml",
+        "backend/src/api/v1/analytics.py",
+        "README.md",
+        "backend/src/core/models/__init__.py"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": 0.0769,
+        "answer_relevancy": 0.8489
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:45:19.145217+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "what are the different stages of ML implemented here",
+      "answer_preview": "Sorry, I could not generate an answer at this time due to an upstream model error. Please try again in a moment.",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "docs/architecture/DATA_PIPELINE.md",
+        "docs/screenshots/landing_page.png",
+        "backend/src/modules/forecasting/models.py",
+        "backend/src/core/models/__init__.py",
+        "README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "LICENSE",
+        "frontend/public/icons.svg",
+        "backend/README.md",
+        "database/README.md",
+        "docs/screenshots/forecasting_studio.png",
+        "backend/src/api/v1/forecasting.py"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.0
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:47:01.629231+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "name the database",
+      "answer_preview": "The project uses a single PostgreSQL 16 instance.  \nThe name of that database is supplied through the `POSTGRES_DB` environment variable in the `docker\u2011compose.yml` file:\n\n```yaml\nservices:\n  db:\n    image: postgres:16-alpine\n    environment:\n      - POSTGRES_USER=${POSTGRES_USER}\n      - POSTGRES_P",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "database/README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "backend/src/modules/analytics/aggregations.py",
+        "database/docker-entrypoint-initdb.d/01_schema_sql.sql",
+        "docs/screenshots/README.md",
+        ".dockerignore",
+        "docs/architecture/OVERVIEW.md",
+        "docker-compose.yml",
+        "backend/src/core/models/store.py",
+        "docs/architecture/DATA_PIPELINE.md",
+        "LICENSE",
+        "backend/src/core/database.py"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": 0.5,
+        "answer_relevancy": 0.788
+      },
+      "error": null
+    },
+    {
+      "timestamp": "2026-11-24T21:47:08.347258+00:00",
+      "user_id": "samikpodder999@gmail.com",
+      "question": "what is the database used here",
+      "answer_preview": "Based on the provided codebase and documentation, the project uses **PostgreSQL 16** as its exclusive, unified database engine.\n\nThis is confirmed by the following files:\n\n*   **`database/README.md`**: Explicitly states, \"The project utilizes PostgreSQL 16 as a single, unified database engine handli",
+      "retrieved_chunks_count": 16,
+      "sources": [
+        "database/README.md",
+        "docs/architecture/ADR_DECISIONS.md",
+        "backend/src/modules/analytics/aggregations.py",
+        "docs/architecture/DATA_PIPELINE.md",
+        "docs/screenshots/etl_data_hub.png",
+        "backend/README.md",
+        "database/docker-entrypoint-initdb.d/01_schema_sql.sql",
+        "frontend/public/favicon.svg",
+        "LICENSE",
+        ".dockerignore",
+        "frontend/src/context/ThemeContext.tsx"
+      ],
+      "ragas_status": "ok",
+      "ragas_scores": {
+        "faithfulness": null,
+        "answer_relevancy": 0.768
+      },
+      "error": null
+    }
+  ]
+}
